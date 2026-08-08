@@ -468,3 +468,111 @@
     if (months < 24) return 'in ' + months + ' months';
     return 'in ' + Math.round(days / 365.25) + ' years';
   }
+
+  /* ==================================================================
+   * SECTION 3 — SCHEDULER
+   * Walks candidate days from `from`, then the hour and minute sets inside
+   * a matching day. Pure: builds its own lookup tables per call.
+   * ================================================================== */
+
+  var HORIZON_YEARS = 50;
+
+  function toSet(values) {
+    var set = Object.create(null);
+    for (var i = 0; i < values.length; i++) set[values[i]] = true;
+    return set;
+  }
+
+  function nextRuns(parsed, options) {
+    var opts = options || {};
+    var count = opts.count || 5;
+    var utc = !!opts.utc;
+    var from = opts.from ? new Date(opts.from.getTime()) : new Date();
+    var empty = { runs: [], reboot: false, complete: false, horizonYears: HORIZON_YEARS };
+
+    if (!parsed || !parsed.ok) return empty;
+    if (parsed.reboot) {
+      return { runs: [], reboot: true, complete: true, horizonYears: HORIZON_YEARS };
+    }
+
+    var minute = fieldOf(parsed, 'minute');
+    var hour = fieldOf(parsed, 'hour');
+    var dom = fieldOf(parsed, 'dom');
+    var month = fieldOf(parsed, 'month');
+    var dow = fieldOf(parsed, 'dow');
+    var monthSet = toSet(month.values);
+    var domSet = toSet(dom.values);
+    var dowSet = toSet(dow.values);
+
+    var y = utc ? from.getUTCFullYear() : from.getFullYear();
+    var mo = utc ? from.getUTCMonth() : from.getMonth();
+    var d = utc ? from.getUTCDate() : from.getDate();
+
+    // Day stepping runs on a UTC-midnight cursor even in local mode: adding
+    // 24h to a local midnight can land on the wrong date across a DST seam.
+    var cursor = Date.UTC(y, mo, d);
+    var horizon = Date.UTC(y + HORIZON_YEARS, mo, d);
+    var fromMs = from.getTime();
+    var runs = [];
+
+    while (cursor <= horizon && runs.length < count) {
+      var day = new Date(cursor);
+      var cy = day.getUTCFullYear();
+      var cm = day.getUTCMonth() + 1;
+      var cd = day.getUTCDate();
+      var cw = day.getUTCDay();
+
+      var matches = false;
+      if (monthSet[cm]) {
+        if (dom.star && dow.star) matches = true;
+        else if (dom.star) matches = !!dowSet[cw];
+        else if (dow.star) matches = !!domSet[cd];
+        // Vixie: with neither field starred, either one matching is enough.
+        else matches = !!domSet[cd] || !!dowSet[cw];
+      }
+
+      if (matches) {
+        for (var hi = 0; hi < hour.values.length && runs.length < count; hi++) {
+          for (var mi = 0; mi < minute.values.length && runs.length < count; mi++) {
+            var h = hour.values[hi];
+            var m = minute.values[mi];
+            var at = utc ? new Date(Date.UTC(cy, cm - 1, cd, h, m, 0, 0))
+              : new Date(cy, cm - 1, cd, h, m, 0, 0);
+            if (!utc) {
+              // A wall-clock minute that does not read back is one the spring
+              // forward skipped; it never happens, so it is not listed.
+              if (at.getFullYear() !== cy || at.getMonth() !== cm - 1 || at.getDate() !== cd ||
+                at.getHours() !== h || at.getMinutes() !== m) continue;
+            }
+            var ms = at.getTime();
+            if (ms <= fromMs) continue;
+            // A repeated wall-clock minute (fall back) resolves to its first
+            // instant, so it is listed once; this keeps the list increasing.
+            if (runs.length && ms <= runs[runs.length - 1].ms) continue;
+            runs.push({ ms: ms, date: at, y: cy, mo: cm, d: cd, h: h, mi: m, dow: cw });
+          }
+        }
+      }
+      cursor += 86400000;
+    }
+
+    return {
+      runs: runs,
+      reboot: false,
+      complete: runs.length === count,
+      horizonYears: HORIZON_YEARS
+    };
+  }
+
+  global.CronExplain = {
+    parse: parse,
+    describe: describe,
+    fieldRows: fieldRows,
+    dayRuleNote: dayRuleNote,
+    nextRuns: nextRuns,
+    formatRun: formatRun,
+    relativeHint: relativeHint,
+    MAX_LENGTH: MAX_LENGTH,
+    HORIZON_YEARS: HORIZON_YEARS
+  };
+}(typeof window !== 'undefined' ? window : this));
