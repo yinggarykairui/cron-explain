@@ -25,6 +25,7 @@
           font-size:.82rem; line-height:1.5; overflow-wrap:anywhere; }
   .line.pass { color: var(--pass); }
   .line.fail { color: var(--fail); font-weight:600; }
+  .line.skip { color: var(--muted); }
   a { color: inherit; }
 </style>
 </head>
@@ -46,6 +47,7 @@
   var out = document.getElementById('out');
   var passed = 0;
   var failed = 0;
+  var skipped = 0;
 
   function section(title) {
     var h = document.createElement('h2');
@@ -58,6 +60,16 @@
     var div = document.createElement('div');
     div.className = 'line ' + (isPass ? 'pass' : 'fail');
     div.textContent = (isPass ? 'PASS  ' : 'FAIL  ') + text;
+    out.appendChild(div);
+  }
+
+  // A check the host environment cannot exercise is reported as skipped, never
+  // as a pass: a green summary must not stand for behaviour nothing ran.
+  function skip(text) {
+    skipped++;
+    var div = document.createElement('div');
+    div.className = 'line skip';
+    div.textContent = 'SKIP  ' + text;
     out.appendChild(div);
   }
 
@@ -307,33 +319,188 @@
     }()));
 
   /* ---------------------------------------------------------------- */
-  section('local time and daylight saving (zone-independent checks)');
+  section('local time and daylight saving (fixed dates)');
+
+  // The scheduler builds local times with new Date(y, mo, d, h, mi), so a
+  // spring-forward gap or a fall-back repeat only exists if the *host* zone has
+  // one. Every check below uses a fixed `from:` date on or around a real
+  // transition; where the host zone has no transition to stand on, the check is
+  // reported as skipped, not passed. Seeding from `new Date()` made this whole
+  // section vacuous on any date far from a transition.
+
+  function localOffsetMinutes(ms) { return -new Date(ms).getTimezoneOffset(); }
+
+  // Every UTC-offset change in the host zone inside a fixed window, narrowed to
+  // the minute. Hourly scan over two years is ~17k cheap reads.
+  function findTransitions(fromIso, toIso) {
+    var start = Date.parse(fromIso);
+    var end = Date.parse(toIso);
+    var found = [];
+    var previous = localOffsetMinutes(start);
+    for (var ms = start; ms <= end; ms += 3600000) {
+      var current = localOffsetMinutes(ms);
+      if (current === previous) continue;
+      var lo = ms - 3600000;
+      var hi = ms;
+      while (hi - lo > 60000) {
+        var mid = lo + Math.floor((hi - lo) / 120000) * 60000;
+        if (mid <= lo || mid >= hi) break;
+        if (localOffsetMinutes(mid) === previous) lo = mid; else hi = mid;
+      }
+      found.push({ ms: hi, before: previous, after: current });
+      previous = current;
+    }
+    return found;
+  }
+
+  // Wall-clock fields N minutes from the wall clock at `ms`. Computed on a UTC
+  // pivot because the answer may be a wall time that does not exist.
+  function wallShift(ms, minutes) {
+    var at = new Date(ms);
+    var pivot = Date.UTC(at.getFullYear(), at.getMonth(), at.getDate(), at.getHours(), at.getMinutes());
+    var want = new Date(pivot + minutes * 60000);
+    return {
+      y: want.getUTCFullYear(), mo: want.getUTCMonth() + 1, d: want.getUTCDate(),
+      h: want.getUTCHours(), mi: want.getUTCMinutes()
+    };
+  }
+
+  function wallLabel(w) {
+    return w.y + '-' + (w.mo < 10 ? '0' : '') + w.mo + '-' + (w.d < 10 ? '0' : '') + w.d +
+      ' ' + (w.h < 10 ? '0' : '') + w.h + ':' + (w.mi < 10 ? '0' : '') + w.mi;
+  }
+
+  function localRuns(expression, from, count) {
+    return CE.nextRuns(parseSafe(expression), { from: from, count: count || 5, utc: false });
+  }
+
+  // Every run must read back as the wall time it claims. This is the assertion
+  // the spring-forward skip exists to satisfy.
+  function readsBack(runs) {
+    return runs.every(function (r) {
+      return r.date.getFullYear() === r.y && r.date.getMonth() + 1 === r.mo &&
+        r.date.getDate() === r.d && r.date.getHours() === r.h && r.date.getMinutes() === r.mi;
+    });
+  }
+
+  function strictlyIncreasing(runs) {
+    for (var i = 1; i < runs.length; i++) if (runs[i].ms <= runs[i - 1].ms) return false;
+    return runs.length > 0;
+  }
+
+  function zoneName() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown'; }
+    catch (e) { return 'unknown'; }
+  }
 
   (function () {
-    var now = new Date();
-    var local = CE.nextRuns(parseSafe('30 2 * * *'), { from: now, count: 5, utc: false });
-    eq('"30 2 * * *" finds five local runs', local.runs.length, 5);
-    // 02:30 is the wall-clock minute US zones skip each spring. A listed run
-    // must read back as the time it claims, in every zone.
-    var honest = local.runs.every(function (r) {
-      return r.date.getHours() === 2 && r.date.getMinutes() === 30 &&
-        r.date.getDate() === r.d && r.date.getMonth() + 1 === r.mo;
-    });
-    ok('every listed local 02:30 really is 02:30 on that date (skips spring-forward gaps)', honest);
-    var increasing = true;
-    for (var i = 1; i < local.runs.length; i++) {
-      if (local.runs[i].ms <= local.runs[i - 1].ms) increasing = false;
+    var changes = findTransitions('2027-01-01T00:00:00Z', '2029-01-01T00:00:00Z');
+    var spring = null;
+    var fall = null;
+    for (var i = 0; i < changes.length; i++) {
+      if (!spring && changes[i].after > changes[i].before) spring = changes[i];
+      if (!fall && changes[i].after < changes[i].before) fall = changes[i];
     }
-    ok('local runs are strictly increasing (a repeated fall-back minute is listed once)', increasing);
-    var hourly = CE.nextRuns(parseSafe('0 * * * *'), { from: now, count: 30, utc: false });
+
+    if (!spring) {
+      skip('host zone ' + zoneName() + ' has no spring-forward in 2027–2028, so the ' +
+        'skipped-minute assertions cannot run here');
+    } else {
+      var jump = spring.after - spring.before;
+      var gap = wallShift(spring.ms, -Math.round(jump / 2));
+      var probe = new Date(gap.y, gap.mo - 1, gap.d, gap.h, gap.mi);
+      ok('probed wall minute ' + wallLabel(gap) + ' really is skipped in ' + zoneName(),
+        probe.getHours() !== gap.h || probe.getMinutes() !== gap.mi,
+        'probe read back as ' + probe.getHours() + ':' + probe.getMinutes());
+
+      var expression = gap.mi + ' ' + gap.h + ' * * *';
+      var across = localRuns(expression, new Date(spring.ms - 3 * 86400000), 5);
+      eq('"' + expression + '" finds five daily runs across the spring-forward', across.runs.length, 5);
+      ok('every run across the spring-forward reads back as the time it claims',
+        readsBack(across.runs),
+        across.runs.map(function (r) { return CE.formatRun(r, false) + '/' + r.date; }).join(' | '));
+      ok('the skipped wall minute ' + wallLabel(gap) + ' is not listed',
+        across.runs.every(function (r) { return !(r.y === gap.y && r.mo === gap.mo && r.d === gap.d); }),
+        across.runs.map(function (r) { return CE.formatRun(r, false); }).join(' | '));
+      ok('runs across the spring-forward strictly increase', strictlyIncreasing(across.runs));
+    }
+
+    if (!fall) {
+      skip('host zone ' + zoneName() + ' has no fall-back in 2027–2028, so the ' +
+        'repeated-minute assertions cannot run here');
+    } else {
+      var back = fall.before - fall.after;
+      var repeat = wallShift(fall.ms, Math.round(back / 2));
+      var repeatExpression = repeat.mi + ' ' + repeat.h + ' * * *';
+      var over = localRuns(repeatExpression, new Date(fall.ms - 3 * 86400000), 5);
+      eq('"' + repeatExpression + '" finds five daily runs across the fall-back', over.runs.length, 5);
+      var onTransitionDay = over.runs.filter(function (r) {
+        return r.y === repeat.y && r.mo === repeat.mo && r.d === repeat.d;
+      });
+      eq('the repeated wall minute ' + wallLabel(repeat) + ' is listed exactly once',
+        onTransitionDay.length, 1);
+      ok('runs across the fall-back strictly increase', strictlyIncreasing(over.runs));
+      ok('every run across the fall-back reads back as the time it claims', readsBack(over.runs),
+        over.runs.map(function (r) { return CE.formatRun(r, false); }).join(' | '));
+    }
+  }());
+
+  // The two named cases, spelled out on fixed US transition dates: 02:30 does
+  // not exist on 2026-03-08, and 01:00–01:59 happens twice on 2026-11-01.
+  (function () {
+    var missing = new Date(2026, 2, 8, 2, 30);
+    if (missing.getHours() === 2 && missing.getMinutes() === 30) {
+      skip('2026-03-08 02:30 exists in ' + zoneName() + ', so "30 2 8 3 *" has no gap to skip here');
+    } else {
+      var runs = localRuns('30 2 8 3 *', new Date(2026, 0, 1, 0, 0), 2).runs;
+      eq('"30 2 8 3 *" skips 2026 because 02:30 does not exist that day',
+        runs.map(function (r) { return CE.formatRun(r, false); }),
+        ['Mon 2027-03-08 02:30', 'Wed 2028-03-08 02:30']);
+      ok('"30 2 8 3 *" runs read back as 02:30', readsBack(runs));
+    }
+  }());
+
+  (function () {
+    var beforeFall = new Date(2026, 10, 1, 1, 30).getTime();
+    var hourLater = new Date(2026, 10, 1, 2, 30).getTime();
+    if (hourLater - beforeFall === 3600000) {
+      skip('2026-11-01 01:00–01:59 happens once in ' + zoneName() + ', so "* 1 1 11 *" has no repeat here');
+    } else {
+      var runs = localRuns('* 1 1 11 *', new Date(2026, 10, 1, 0, 0), 60).runs;
+      eq('"* 1 1 11 *" lists the repeated hour once: 60 minutes, not 120', runs.length, 60);
+      var stamps = {};
+      var distinct = runs.every(function (r) {
+        var key = CE.formatRun(r, false);
+        if (stamps[key]) return false;
+        stamps[key] = true;
+        return true;
+      });
+      ok('every wall-clock minute of the repeated hour is listed once', distinct);
+      eq('the repeated hour resolves to its first pass (59 minutes end to end)',
+        runs[runs.length - 1].ms - runs[0].ms, 59 * 60000);
+      ok('"* 1 1 11 *" runs strictly increase', strictlyIncreasing(runs));
+    }
+  }());
+
+  // Zone-independent, fixed `from:`: whatever the host zone, a listed local run
+  // reads back as its own wall clock and no wall minute appears twice.
+  (function () {
+    var from = new Date(2027, 2, 1, 0, 0);
+    var local = localRuns('30 2 * * *', from, 5);
+    eq('"30 2 * * *" finds five local runs from a fixed March date', local.runs.length, 5);
+    ok('every listed local 02:30 reads back as 02:30 on the date it claims', readsBack(local.runs),
+      local.runs.map(function (r) { return CE.formatRun(r, false); }).join(' | '));
+    ok('those runs strictly increase', strictlyIncreasing(local.runs));
+
+    var hourly = localRuns('0 * * * *', new Date(2027, 9, 30, 0, 0), 60);
     var seen = {};
-    var noDuplicateWallClock = hourly.runs.every(function (r) {
+    ok('no wall-clock minute is listed twice across 60 hourly runs', hourly.runs.every(function (r) {
       var key = r.y + '-' + r.mo + '-' + r.d + ' ' + r.h + ':' + r.mi;
       if (seen[key]) return false;
       seen[key] = true;
       return true;
-    });
-    ok('no wall-clock minute is listed twice across 30 hourly runs', noDuplicateWallClock);
+    }));
+    ok('60 hourly local runs read back as the times they claim', readsBack(hourly.runs));
   }());
 
   /* ---------------------------------------------------------------- */
@@ -455,11 +622,12 @@
 
   /* ---------------------------------------------------------------- */
   var summary = document.getElementById('summary');
-  summary.textContent = passed + ' passed, ' + failed + ' failed';
+  var counts = passed + ' passed, ' + failed + ' failed' + (skipped ? ', ' + skipped + ' skipped' : '');
+  summary.textContent = counts;
   summary.className = failed === 0 ? 'ok' : 'bad';
-  document.title = 'cron-explain tests — ' + passed + ' passed, ' + failed + ' failed';
+  document.title = 'cron-explain tests — ' + counts;
   // Read by the browser check that ships this build; harmless otherwise.
-  window.__cronExplainTestResults = { passed: passed, failed: failed };
+  window.__cronExplainTestResults = { passed: passed, failed: failed, skipped: skipped };
 }());
 </script>
 </body>
