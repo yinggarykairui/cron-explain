@@ -728,8 +728,10 @@
     CE.describe(parseSafe('0,30 9-17 15 2 FRI')),
     'In February, at minutes 0 and 30 of hours 9 through 17, on day 15 of the month or on Friday.');
 
-  // Assertions that exist to kill named mutants (see README): ordinal's "st"
-  // branch, compactList's run threshold, and relativeHint's 48-hour boundary.
+  // Three assertions that exist because a mutation run found nothing pinning
+  // the behaviour: ordinal's "st" branch, compactList's run threshold (two
+  // consecutive values are a pair, three are a run), and relativeHint's
+  // 48-hour boundary. Each fails if its line is changed.
   eq('an ordinal ending in 1 is "21st", not "21th"',
     CE.describe(parseSafe('0 0 */21 * *')), 'At 00:00, on every 21st day of the month.');
   eq('ordinals 2nd, 3rd and 11th', [CE.fieldRows(parseSafe('*/2 * * * *'))[0].meaning,

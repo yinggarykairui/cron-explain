@@ -8,7 +8,9 @@ Paste a cron expression and see what it means in plain English, plus the next fi
 
 ## What it does
 
-Paste a five-field cron expression — minute, hour, day-of-month, month, day-of-week — and get a plain-English sentence, a table per field, and the next five run times. It reads ranges (`1-5`), lists (`1,15,30`), steps (`*/15`, `9/2`), `JAN`/`MON` names, `0` and `7` as Sunday, and the `@daily` aliases; `@reboot` is explained but lists no runs. Quartz tokens (`?`, `L`, `W`, `#`), seconds fields and year fields are rejected by name, not by a broken page. It follows Vixie cron's real day rule: when neither day field starts with `*`, a day matches on day-of-month **or** day-of-week, and the page says so. Times use your browser's zone or UTC, with the resolved zone and offset printed; a spring-forward gap is skipped and a repeated fall-back minute is listed once.
+Paste a five-field cron line and get a plain-English sentence, a table of what each field means, and the next five run times. It reads ranges, lists, steps, month and day names, `0` and `7` as Sunday, and the `@daily` aliases, and it explains `@reboot` without inventing run times for it.
+
+Quartz tokens, seconds fields and year fields are rejected by name, so a bad line gets a message instead of a broken page. It follows Vixie cron's real day rule: when neither day field starts with `*`, a day matches on day-of-month **or** day-of-week, and the page says so. Times are shown in your browser's zone or in UTC, the zone and offset are printed, minutes lost to a clock jumping forward are left out, and a minute that happens twice is listed once.
 
 ## How to run
 
