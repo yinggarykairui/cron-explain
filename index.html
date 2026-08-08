@@ -301,11 +301,6 @@
   // Length of an over-long hash, kept so the message can name what was actually
   // supplied rather than the length it was capped to.
   var hashOverLength = 0;
-  // Height of the answer block the last time it held a sentence. The CSS
-  // reserve covers every error message, but a long sentence can be taller than
-  // any of them; without this, breaking such an expression with one keystroke
-  // would shrink the block and pull the whole page up.
-  var lastGoodHeight = 0;
 
   function isUtc() {
     var utc = document.querySelector('input[name="tz"][value="utc"]');
@@ -482,6 +477,54 @@
     dstNoteEl.hidden = renderRuns(parsed, utc) === 0;
   }
 
+  function expandedText(parsed) {
+    return parsed.alias && parsed.expanded
+      ? parsed.alias + ' expands to ' + parsed.expanded
+      : '';
+  }
+
+  // How tall the answer block would be right now if it held the last
+  // expression that parsed. The CSS reserve covers every error message, but a
+  // valid sentence can be taller than any of them, so an error has to be
+  // pinned to at least this height or breaking such an expression with one
+  // keystroke would shrink the block and pull the page up.
+  //
+  // It is measured every time it is used, and on resize, because a height is
+  // only true of the width it was taken at: a pin measured at 1280 and left in
+  // place at 360 undercut the narrow reserve and let a completed expression
+  // jump 44.8px. The copy is measured instead of the block itself so the
+  // sentence's live region is never written to for a measurement.
+  function goodAnswerHeight() {
+    if (!lastGood) return 0;
+    var ghost = answerEl.cloneNode(true);
+    var ids = ghost.querySelectorAll('[id]');
+    for (var i = 0; i < ids.length; i++) {
+      ids[i].removeAttribute('id');
+      ids[i].removeAttribute('aria-live');
+    }
+    var sentence = ghost.querySelector('.sentence');
+    sentence.className = 'sentence';
+    sentence.textContent = CE.describe(lastGood);
+    ghost.querySelector('.muted').textContent = expandedText(lastGood);
+    // A valid answer carries no "last expression that parsed" line.
+    ghost.querySelector('.stale').textContent = '';
+    ghost.style.minHeight = '';
+    ghost.style.position = 'absolute';
+    ghost.style.visibility = 'hidden';
+    ghost.style.left = '-10000px';
+    ghost.style.top = '0';
+    ghost.style.width = answerEl.getBoundingClientRect().width + 'px';
+    answerEl.parentNode.insertBefore(ghost, answerEl);
+    var height = ghost.getBoundingClientRect().height;
+    ghost.parentNode.removeChild(ghost);
+    return height;
+  }
+
+  function pinAnswer() {
+    var height = goodAnswerHeight();
+    answerEl.style.minHeight = height ? height + 'px' : '';
+  }
+
   // An error keeps the breakdown and the run list on screen, greyed and
   // labelled, so nothing moves and nothing claims to describe the typing.
   // The timezone control above the list stays live, so the frozen list is
@@ -491,7 +534,7 @@
     sentenceEl.className = 'sentence is-error';
     sentenceEl.textContent = message;
     expandedEl.textContent = '';
-    answerEl.style.minHeight = lastGoodHeight ? lastGoodHeight + 'px' : '';
+    pinAnswer();
     if (lastGood) {
       setStale(true);
       showRuns(lastGood, isUtc());
@@ -536,9 +579,7 @@
     setStale(false);
     sentenceEl.className = 'sentence';
     sentenceEl.textContent = CE.describe(parsed);
-    expandedEl.textContent = parsed.alias && parsed.expanded
-      ? parsed.alias + ' expands to ' + parsed.expanded
-      : '';
+    expandedEl.textContent = expandedText(parsed);
 
     clear(rowsEl);
     if (parsed.reboot) {
@@ -551,7 +592,6 @@
     }
 
     showRuns(parsed, utc);
-    lastGoodHeight = answerEl.getBoundingClientRect().height;
   }
 
   // One try/catch around the whole render: an unexpected failure becomes a
@@ -592,6 +632,15 @@
     hashOverLength = 0;
     resetCopy();
     render();
+  });
+
+  // A pin is a height, and a height belongs to one width. When the window
+  // changes width the pin is re-measured; without this it survived the resize
+  // and the next keystroke moved the page by the difference.
+  window.addEventListener('resize', function () {
+    if (!answerEl.style.minHeight) return;
+    answerEl.style.minHeight = '';
+    pinAnswer();
   });
 
   var radios = document.querySelectorAll('input[name="tz"]');
