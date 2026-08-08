@@ -257,6 +257,17 @@
     /and/i.test(CE.dayRuleNote(parseSafe('0 0 * * MON'))), true);
   eq('day-rule note says every day when both are starred',
     /every day/i.test(CE.dayRuleNote(parseSafe('0 0 * * *'))), true);
+  ok('day-rule note explains the AND-because-star case and quotes the field',
+    /and/i.test(CE.dayRuleNote(parseSafe('0 0 */2 * MON'))) &&
+    CE.dayRuleNote(parseSafe('0 0 */2 * MON')).indexOf('"*/2"') >= 0,
+    CE.dayRuleNote(parseSafe('0 0 */2 * MON')));
+  ok('day-rule note names a star-prefixed day-of-week too',
+    CE.dayRuleNote(parseSafe('0 0 1 * */2')).indexOf('day-of-week field "*/2"') >= 0,
+    CE.dayRuleNote(parseSafe('0 0 1 * */2')));
+  ok('every star combination gets a note', ['0 0 * * *', '0 0 1 * *', '0 0 * * MON',
+    '0 0 1 * MON', '0 0 */2 * MON', '0 0 1 * */2', '0 0 */2 * */3'].every(function (e) {
+      return CE.dayRuleNote(parseSafe(e)).length > 0;
+    }));
 
   /* ---------------------------------------------------------------- */
   section('scheduler: sparse, dense and impossible schedules');
@@ -575,6 +586,21 @@
     CE.describe(parseSafe('0 0 1 * MON')));
   ok('"0 0 */2 * MON" sentence does not say "or"', !/, or /.test(CE.describe(parseSafe('0 0 */2 * MON'))),
     CE.describe(parseSafe('0 0 */2 * MON')));
+  // A month clause must scope both halves of an OR, so it leads the sentence.
+  eq('"0 0 29 2 5" scopes February over both day branches',
+    CE.describe(parseSafe('0 0 29 2 5')),
+    'In February, at 00:00 on day 29 of the month or on Friday.');
+  eq('"0 0 1 6 MON-FRI" scopes June over both day branches',
+    CE.describe(parseSafe('0 0 1 6 MON-FRI')),
+    'In June, at 00:00 on day 1 of the month or Monday through Friday.');
+  eq('"*/30 * 1 12 SUN" keeps the leading month with a step time phrase',
+    CE.describe(parseSafe('*/30 * 1 12 SUN')),
+    'In December, every 30 minutes on day 1 of the month or on Sunday.');
+  eq('a month with no OR branch still reads as a trailing clause',
+    CE.describe(parseSafe('0 0 29 2 *')), 'At 00:00, on day 29 of the month, in February.');
+  eq('an AND branch with a month stays trailing',
+    CE.describe(parseSafe('0 0 */2 2 MON')),
+    'At 00:00, on every 2nd day of the month, and only on Monday, in February.');
   eq('"* * * * *" sentence', CE.describe(parseSafe('* * * * *')), 'Every minute.');
   eq('"*/15 * * * *" sentence', CE.describe(parseSafe('*/15 * * * *')), 'Every 15 minutes.');
   eq('"0 */6 * * *" lists the clock times', CE.describe(parseSafe('0 */6 * * *')),

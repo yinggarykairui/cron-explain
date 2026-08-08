@@ -399,7 +399,14 @@
     if (dow.raw === '*') {
       return 'Day-of-week is *, so the day-of-month field alone decides which days match (AND).';
     }
-    return 'A day field starts with *, so Vixie cron requires both day fields to match (AND), not either one.';
+    // What is left is a star-prefixed step such as "*/2": it restricts which
+    // days run, yet Vixie's star flag is literal, so the field still counts as
+    // unrestricted and the two day fields are ANDed. This is the footgun.
+    var starred = dom.star
+      ? (dow.star ? 'Both day fields start' : 'The day-of-month field "' + dom.raw + '" starts')
+      : 'The day-of-week field "' + dow.raw + '" starts';
+    return starred + ' with *, so Vixie counts it as unrestricted for this rule. ' +
+      'Both day fields must match (AND), not either one.';
   }
 
   function describe(parsed) {
@@ -407,10 +414,27 @@
     if (parsed.reboot) {
       return 'Once, when the machine boots. There is no clock time to predict.';
     }
-    var parts = [timePhrase(fieldOf(parsed, 'minute'), fieldOf(parsed, 'hour'))];
-    var day = dayPhrase(fieldOf(parsed, 'dom'), fieldOf(parsed, 'dow'));
-    if (day) parts.push(day);
+    var dom = fieldOf(parsed, 'dom');
+    var dow = fieldOf(parsed, 'dow');
+    var time = timePhrase(fieldOf(parsed, 'minute'), fieldOf(parsed, 'hour'));
     var month = monthPhrase(fieldOf(parsed, 'month'));
+
+    // On the OR branch the sentence carries two alternative day rules. A month
+    // clause tacked on the end reads as if it qualified only the second one
+    // ("on day 29 of the month, or on Friday, in February"), so a restricted
+    // month leads instead and scopes both.
+    if (month && !dom.star && !dow.star) {
+      var d = domPhrase(dom);
+      var w = dowPhrase(dow);
+      if (d && w) {
+        return month.charAt(0).toUpperCase() + month.slice(1) + ', ' +
+          time.charAt(0).toLowerCase() + time.slice(1) + ' ' + d + ' or ' + w + '.';
+      }
+    }
+
+    var parts = [time];
+    var day = dayPhrase(dom, dow);
+    if (day) parts.push(day);
     if (month) parts.push(month);
     return parts.join(', ') + '.';
   }
