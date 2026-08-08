@@ -10,6 +10,10 @@
   /* One accent colour, system fonts, ~62ch measure. prefers-color-scheme
      only: no toggle, no stored preference. */
   :root {
+    /* Without this the form controls stay light-themed on a dark page: an
+       unselected radio renders as a white disc, the brightest thing in its
+       corner, out-shouting the selected one. */
+    color-scheme: light dark;
     --bg: #fdfdfc;
     --fg: #1b1b1a;
     --muted: #5d5d58;
@@ -19,6 +23,9 @@
     --edge: #8d8d86;
     --accent: #0a5ec7;
     --error: #a41c1c;
+    /* The answer sits in a tinted panel, so its reserved height reads as
+       padding rather than as a hole in the page. */
+    --panel: #f1f1ec;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -29,6 +36,7 @@
       --edge: #686970;  /* 3.28:1 on --bg */
       --accent: #7db3ff;
       --error: #ff9b93;
+      --panel: #1e1f24;
     }
   }
   * { box-sizing: border-box; }
@@ -46,6 +54,9 @@
   h1 { font-size: 1.5rem; line-height: 1.3; margin: 0 0 .25rem; letter-spacing: -0.01em; }
   h2 { font-size: .95rem; text-transform: lowercase; letter-spacing: .04em; color: var(--muted);
        margin: 2rem 0 .5rem; font-weight: 600; }
+  /* The panel already ends with space inside it; another 2rem on top of that
+     is what made the resting state read as a hole. */
+  .answer + h2 { margin-top: 1.25rem; }
   p { margin: .6rem 0; }
   .lede { color: var(--muted); margin-top: 0; }
   .muted { color: var(--muted); font-size: .9rem; }
@@ -73,12 +84,32 @@
   }
   input#expr:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
 
-  /* The sentence is the payload, so it outweighs everything above it. The
-     answer block reserves enough height for a two-line error plus the
-     last-parsed line, so a keystroke that flips valid/invalid moves nothing. */
-  .answer { min-height: 4.9rem; margin: 1rem 0 0; }
+  /* The sentence is the payload, so it outweighs everything above it, and it
+     sits in a bounded block rather than loose on the page.
+
+     min-height is the measured tallest ERROR state at this width, so no
+     rejected expression can ever grow the block. It is set per breakpoint
+     because the same message is three lines at 360px and one at 1280px. A
+     long sentence may still be taller than that — the script then pins the
+     block to that height for as long as an error is showing, so the pair
+     "valid, then a broken keystroke, then valid again" never resizes it.
+
+     Content is top-aligned, so the first line of the answer sits at the same
+     y in every state. Two earlier attempts at this moved that line instead of
+     pinning it. */
+  .answer {
+    min-height: 6rem;      /* measured: tallest error at >=768px is 95.6px */
+    margin: 1rem 0 0;
+    padding: .8rem 1rem;
+    background: var(--panel);
+    border-radius: 6px;
+  }
+  .answer p { margin: 0; }
+  /* An empty paragraph must not reserve its margins on top of the block's. */
+  .answer p:empty { display: none; }
+  #expanded, #stale { margin-top: .35rem; }
   .sentence { font-size: 1.35rem; font-weight: 500; line-height: 1.4; margin: 0; }
-  .sentence.is-error { color: var(--error); font-size: 1rem; font-weight: 400; line-height: 1.5; }
+  .sentence.is-error { color: var(--error); font-size: .95rem; font-weight: 400; line-height: 1.45; }
 
   fieldset { border: 0; padding: 0; margin: .5rem 0 0; }
   legend { padding: 0; font-size: .85rem; color: var(--muted); }
@@ -91,10 +122,11 @@
   th { text-align: left; font-weight: 600; font-size: .8rem; color: var(--muted);
        border-bottom: 1px solid var(--rule); padding: .35rem .5rem .35rem 0; }
   td { padding: .4rem .5rem .4rem 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
-  /* Long raw fields and long meanings are the two things that force sideways
-     scroll at 360px, so both are allowed to break anywhere. The accent is
+  /* Long meanings are what force sideways scroll at 360px, so prose may break
+     anywhere. The raw column breaks only when a token genuinely does not fit,
+     or a 7-character "@reboot" comes apart as "@rebo / ot". The accent is
      reserved for things you can click; this column is inert. */
-  td.raw { color: var(--fg); overflow-wrap: anywhere; }
+  td.raw { color: var(--fg); overflow-wrap: break-word; }
   td.meaning { overflow-wrap: anywhere; }
   /* "day-of-month" is allowed to break at its hyphens rather than widen the
      table past the viewport. */
@@ -103,13 +135,20 @@
   /* The day rule is the thing this page exists to get right, so it is set at
      body size in body colour rather than as a footnote. */
   .dayrule { font-size: 1rem; line-height: 1.55; margin: .75rem 0 0; }
-  .dayrule .or { color: var(--accent); font-weight: 600; }
+  /* The rule this page exists for turns on this one word, so it is set in bold
+     — but not in the accent, which belongs to things you can click. An inert
+     accent-blue token inline in a paragraph is a stronger click signal than
+     the table cells that were recoloured for exactly that reason. Leaving the
+     colour alone also lets the stale rule below grey it. */
+  .dayrule .or { font-weight: 700; }
 
   ol#runs { margin: .5rem 0; padding-left: 1.4rem; }
-  ol#runs li { margin: .25rem 0; overflow-wrap: anywhere; }
+  ol#runs li { margin: .25rem 0; overflow-wrap: break-word; }
   ol#runs li.empty { list-style: none; margin-left: -1.4rem; color: var(--muted); font-size: .9rem; }
   .stamp { font-size: .95rem; }
-  .hint { color: var(--muted); font-size: .85rem; }
+  /* The hint wraps as one piece or not at all: "in 36 / hours" split across
+     two lines on the first item while the others stayed whole. */
+  .hint { color: var(--muted); font-size: .85rem; white-space: nowrap; }
   /* After the table and list colours, so greying a stale section beats them. */
   .is-stale, .is-stale td, .is-stale th, .is-stale li, .is-stale span { color: var(--muted); }
 
@@ -135,6 +174,12 @@
   footer { margin-top: 3rem; border-top: 1px solid var(--rule); padding-top: .75rem; }
   a { color: var(--accent); }
 
+  /* The same message is one line at 1280px and four at 360px, so the reserve
+     is measured per bucket. */
+  @media (max-width: 767px) {
+    .answer { min-height: 8.65rem; }   /* tallest error at 481-767px: 138.1px */
+  }
+
   /* Phone widths: everything above the input is trimmed so the answer sits
      next to the box with the keyboard open. */
   @media (max-width: 480px) {
@@ -142,8 +187,13 @@
     h1 { font-size: 1.25rem; margin-bottom: .1rem; }
     .lede { font-size: .95rem; line-height: 1.5; margin-bottom: .35rem; }
     label.field-label { margin-top: .85rem; }
-    .answer { min-height: 4.9rem; }
+    .answer { min-height: 10.05rem; padding: .8rem; }   /* 160.1px at 360 */
     .sentence { font-size: 1.2rem; }
+    /* A stamp plus a hint is one line too wide here, and which items wrapped
+       depended on how long the hint happened to be — so the first UTC item
+       broke and the rest did not, and switching zone moved the page. The hint
+       gets its own line, and every item is two lines in both zones. */
+    .hint { display: block; }
     h2 { margin-top: 1.5rem; }
   }
 </style>
@@ -183,9 +233,9 @@
   <p class="muted" id="zoneline"></p>
   <ol id="runs"></ol>
   <p class="note" id="dstnote">
-    Daylight saving: a wall-clock minute a spring-forward skips is not listed. A minute a
-    fall-back repeats is listed once. These are the times a wall clock shows, not a promise
-    about any particular cron.
+    Daylight saving, in local time: when the clock jumps forward, the minutes it skips are
+    not listed. When the clock goes back, a minute that happens twice is listed once. These
+    are the times a wall clock shows. Another cron may choose differently.
   </p>
 
   <h2>Share</h2>
@@ -230,13 +280,20 @@
   var copyBtn = document.getElementById('copy');
   var copyStatus = document.getElementById('copystatus');
   var copyField = document.getElementById('copyfield');
+  var answerEl = document.querySelector('.answer');
 
-  // The last expression that parsed, so an error can say what the rows and the
-  // run list below it are still describing.
+  // The last parse that succeeded, kept whole rather than as its text: an
+  // error leaves its rows and its run list on screen, and the timezone control
+  // above that list stays live, so the frozen list has to be recomputable.
   var lastGood = null;
   // Length of an over-long hash, kept so the message can name what was actually
   // supplied rather than the length it was capped to.
   var hashOverLength = 0;
+  // Height of the answer block the last time it held a sentence. The CSS
+  // reserve covers every error message, but a long sentence can be taller than
+  // any of them; without this, breaking such an expression with one keystroke
+  // would shrink the block and pull the whole page up.
+  var lastGoodHeight = 0;
 
   function isUtc() {
     var utc = document.querySelector('input[name="tz"][value="utc"]');
@@ -313,7 +370,7 @@
     dayRuleEl.classList.toggle('is-stale', on);
     runsEl.classList.toggle('is-stale', on);
     staleEl.textContent = on && lastGood
-      ? 'Below: ' + lastGood + ', the last that parsed.'
+      ? 'Still showing the last expression that parsed: ' + lastGood.expression + '.'
       : '';
   }
 
@@ -361,16 +418,27 @@
     runsEl.appendChild(li);
   }
 
+  // One row spanning the table, for a state with no fields to break down. The
+  // @reboot path has had one of these since the start; a cold load with an
+  // unparseable hash used to render the header and nothing under it.
+  function emptyRow(text) {
+    var tr = document.createElement('tr');
+    var td = document.createElement('td');
+    td.className = 'meaning';
+    td.colSpan = 3;
+    td.textContent = text;
+    tr.appendChild(td);
+    rowsEl.appendChild(tr);
+  }
+
+  // Returns how many real run times are on screen.
   function renderRuns(parsed, utc) {
     clear(runsEl);
     var now = new Date();
     var result = CE.nextRuns(parsed, { from: now, count: 5, utc: utc });
-    // The daylight-saving footnote governs local wall-clock times. It says
-    // nothing about UTC, about @reboot or about a schedule that never runs.
-    dstNoteEl.hidden = utc || result.reboot || result.runs.length === 0;
     if (result.reboot) {
       emptyRun('No run times: @reboot fires when the machine boots, not on a clock.');
-      return;
+      return 0;
     }
     for (var i = 0; i < result.runs.length; i++) {
       var run = result.runs[i];
@@ -391,29 +459,60 @@
     if (!result.complete) {
       emptyRun('No run in the next ' + result.horizonYears + ' years.');
     }
+    return result.runs.length;
+  }
+
+  // The daylight-saving note explains how the times in the list were picked,
+  // so it belongs with the list and goes only when the list holds no times.
+  // Hiding it on a keystroke that flips valid/invalid, or on a change of
+  // timezone, pulled 115px out from under everything below it at 360px.
+  function showRuns(parsed, utc) {
+    dstNoteEl.hidden = renderRuns(parsed, utc) === 0;
   }
 
   // An error keeps the breakdown and the run list on screen, greyed and
   // labelled, so nothing moves and nothing claims to describe the typing.
+  // The timezone control above the list stays live, so the frozen list is
+  // recomputed for whichever zone is selected: a label reading "UTC" over
+  // times in New York wall clock is the lie the greying exists to prevent.
   function showError(message) {
     sentenceEl.className = 'sentence is-error';
     sentenceEl.textContent = message;
     expandedEl.textContent = '';
+    answerEl.style.minHeight = lastGoodHeight ? lastGoodHeight + 'px' : '';
+    if (lastGood) {
+      setStale(true);
+      showRuns(lastGood, isUtc());
+      return;
+    }
+    // Nothing has parsed yet — a cold load with a bad hash. There is nothing to
+    // freeze, so both the table and the list say so instead of standing empty.
+    setStale(false);
+    clear(rowsEl);
+    emptyRow('No fields to break down: the expression above did not parse.');
+    setDayRule('The day-of-month / day-of-week rule needs an expression that parses.');
+    clear(runsEl);
+    emptyRun('No run times: the expression above did not parse.');
     dstNoteEl.hidden = true;
-    setStale(true);
   }
 
   function renderOnce() {
     var text = input.value;
     var utc = isUtc();
     zoneEl.textContent = zoneText(utc);
-    writeHash(text.replace(/^\s+|\s+$/g, ''));
+    // Dropped before anything is measured, so a valid answer sizes itself.
+    answerEl.style.minHeight = '';
 
     if (hashOverLength) {
+      // The URL is left exactly as it arrived. Reporting a link as too long
+      // and deleting it from the address bar in the same breath loses the one
+      // thing the message is about, and makes Copy link offer a bare URL.
       showError('That link carries ' + hashOverLength + ' characters. A cron line is at most ' +
         CE.MAX_LENGTH + ', so it was not read.');
       return;
     }
+
+    writeHash(text.replace(/^\s+|\s+$/g, ''));
 
     var parsed = CE.parse(text);
     if (!parsed.ok) {
@@ -421,7 +520,7 @@
       return;
     }
 
-    lastGood = parsed.expression;
+    lastGood = parsed;
     setStale(false);
     sentenceEl.className = 'sentence';
     sentenceEl.textContent = CE.describe(parsed);
@@ -439,7 +538,8 @@
       setDayRule(CE.dayRuleNote(parsed));
     }
 
-    renderRuns(parsed, utc);
+    showRuns(parsed, utc);
+    lastGoodHeight = answerEl.getBoundingClientRect().height;
   }
 
   // One try/catch around the whole render: an unexpected failure becomes a
@@ -462,12 +562,14 @@
       button.type = 'button';
       button.className = 'example';
       button.textContent = expression;
+      // Focus stays on the button that was pressed. Throwing it back to the
+      // input put Tab order behind all six examples again, so reaching the
+      // timezone control or Copy link meant re-traversing the whole row.
       button.addEventListener('click', function () {
         input.value = expression;
         hashOverLength = 0;
         resetCopy();
         render();
-        input.focus();
       });
       li.appendChild(button);
       examplesEl.appendChild(li);
@@ -488,9 +590,10 @@
   window.addEventListener('hashchange', function () {
     var got = readHash();
     hashOverLength = got.length > HASH_LIMIT ? got.length : 0;
-    // An emptied hash means no expression, which is the default — not "keep
-    // showing whatever was there before the URL changed".
-    var next = hashOverLength ? '' : (got.text || DEFAULT_EXPRESSION);
+    // An emptied hash means no expression. It must not fall back to the
+    // default: that swaps the expression on screen for one nobody asked for
+    // and then writes the default's own hash into the URL just cleared.
+    var next = hashOverLength ? '' : got.text;
     if (next !== input.value || hashOverLength) {
       input.value = next;
       resetCopy();

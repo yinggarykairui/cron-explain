@@ -148,12 +148,12 @@
 
   function parseField(raw, def) {
     if (raw.indexOf('#') >= 0) {
-      return { message: 'The ' + def.label + ' field uses "#", a Quartz token (nth weekday of the month). This parser accepts standard Vixie/POSIX cron only.' };
+      return { message: 'The ' + def.label + ' field uses "#", the Quartz nth-weekday token. This parser reads standard Vixie/POSIX cron only.' };
     }
     var atoms = raw.split(/[,\-/]/);
     for (var i = 0; i < atoms.length; i++) {
       if (QUARTZ_ATOM.test(atoms[i])) {
-        return { message: 'The ' + def.label + ' field uses "' + atoms[i] + '", a Quartz token. This parser accepts standard Vixie/POSIX cron only (no ?, L, W, LW, C or #).' };
+        return { message: 'The ' + def.label + ' field uses "' + atoms[i] + '", a Quartz token. This parser reads standard Vixie/POSIX cron only.' };
       }
     }
     if (!def.names && /[a-z]/i.test(raw)) {
@@ -216,7 +216,7 @@
         };
       }
       if (!Object.prototype.hasOwnProperty.call(ALIASES, alias)) {
-        return fail(null, 'Unknown alias "' + text + '". Known aliases: @yearly, @annually, @monthly, @weekly, @daily, @midnight, @hourly, @reboot.');
+        return fail(null, 'Unknown alias "' + text + '". Known: @yearly, @annually, @monthly, @weekly, @daily, @midnight, @hourly, @reboot.');
       }
       var expandedResult = parse(ALIASES[alias]);
       expandedResult.alias = alias;
@@ -228,7 +228,7 @@
     var parts = text.split(/[ \t\r\n]+/);
     if (parts.length !== 5) {
       if (parts.length === 6 || parts.length === 7) {
-        return fail(null, 'Found ' + parts.length + ' fields; this parser takes 5 (minute hour day-of-month month day-of-week). A leading seconds field or a trailing year field is not supported.');
+        return fail(null, 'Found ' + parts.length + ' fields; 5 are expected: minute hour day-of-month month day-of-week. No seconds field, no year field.');
       }
       return fail(null, 'Found ' + parts.length + ' field' + (parts.length === 1 ? '' : 's') + '; 5 are expected (minute hour day-of-month month day-of-week).');
     }
