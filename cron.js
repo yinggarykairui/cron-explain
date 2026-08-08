@@ -32,11 +32,11 @@
   // Field order is fixed: minute hour day-of-month month day-of-week.
   // `names` is null where names are rejected outright (minute, hour, dom).
   var FIELD_DEFS = Object.freeze([
-    Object.freeze({ key: 'minute', label: 'minute', unit: 'minute', min: 0, max: 59, names: null }),
-    Object.freeze({ key: 'hour', label: 'hour', unit: 'hour', min: 0, max: 23, names: null }),
-    Object.freeze({ key: 'dom', label: 'day-of-month', unit: 'day of the month', min: 1, max: 31, names: null }),
-    Object.freeze({ key: 'month', label: 'month', unit: 'month', min: 1, max: 12, names: MONTH_ABBR }),
-    Object.freeze({ key: 'dow', label: 'day-of-week', unit: 'day of the week', min: 0, max: 7, names: DAY_ABBR })
+    Object.freeze({ key: 'minute', label: 'minute', min: 0, max: 59, names: null }),
+    Object.freeze({ key: 'hour', label: 'hour', min: 0, max: 23, names: null }),
+    Object.freeze({ key: 'dom', label: 'day-of-month', min: 1, max: 31, names: null }),
+    Object.freeze({ key: 'month', label: 'month', min: 1, max: 12, names: MONTH_ABBR }),
+    Object.freeze({ key: 'dow', label: 'day-of-week', min: 0, max: 7, names: DAY_ABBR })
   ]);
 
   var ALIASES = Object.freeze({
