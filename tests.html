@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cron-explain — tests</title>
+<style>
+  :root { --bg:#fdfdfc; --fg:#1b1b1a; --muted:#5d5d58; --pass:#0a6b3d; --fail:#a41c1c; --rule:#dcdcd6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16171a; --fg:#e8e8e4; --muted:#a0a09a; --pass:#6ed49a; --fail:#ff9b93; --rule:#33343a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:2rem 1rem 4rem; background:var(--bg); color:var(--fg);
+         font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         line-height:1.6; }
+  main { max-width: 78ch; margin: 0 auto; }
+  h1 { font-size:1.4rem; margin:0 0 .25rem; }
+  p.lede { color:var(--muted); margin-top:0; }
+  #summary { font-size:1.1rem; font-weight:600; padding:.5rem 0; border-bottom:1px solid var(--rule); }
+  #summary.ok { color: var(--pass); }
+  #summary.bad { color: var(--fail); }
+  h2 { font-size:.85rem; text-transform:lowercase; letter-spacing:.04em; color:var(--muted);
+       margin:1.5rem 0 .25rem; }
+  .line { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size:.82rem; line-height:1.5; overflow-wrap:anywhere; }
+  .line.pass { color: var(--pass); }
+  .line.fail { color: var(--fail); font-weight:600; }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <h1>cron-explain tests</h1>
+  <p class="lede">Assertions run on load, in this page. No runner, no build — works from
+    <code>file://</code>. Back to <a href="index.html">the explainer</a>.</p>
+  <div id="summary">running…</div>
+  <div id="out"></div>
+</main>
+
+<script src="cron.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var CE = window.CronExplain;
+  var out = document.getElementById('out');
+  var passed = 0;
+  var failed = 0;
+
+  function section(title) {
+    var h = document.createElement('h2');
+    h.textContent = title;
+    out.appendChild(h);
+  }
+
+  function line(isPass, text) {
+    if (isPass) passed++; else failed++;
+    var div = document.createElement('div');
+    div.className = 'line ' + (isPass ? 'pass' : 'fail');
+    div.textContent = (isPass ? 'PASS  ' : 'FAIL  ') + text;
+    out.appendChild(div);
+  }
+
+  function ok(name, condition, detail) {
+    line(!!condition, name + (condition ? '' : '  — ' + (detail === undefined ? 'false' : detail)));
+  }
+
+  function eq(name, actual, expected) {
+    var a = JSON.stringify(actual);
+    var e = JSON.stringify(expected);
+    line(a === e, name + (a === e ? '' : '  — got ' + a + ', expected ' + e));
+  }
+
+  // parse() must never throw, whatever it is handed.
+  function parseSafe(expression) {
+    try {
+      return CE.parse(expression);
+    } catch (err) {
+      line(false, 'parse threw on ' + JSON.stringify(String(expression)).slice(0, 60) + ': ' + err);
+      return { ok: false, error: { message: 'threw' } };
+    }
+  }
+
+  function rejects(expression, needle) {
+    var label = 'rejects ' + JSON.stringify(String(expression)).slice(0, 48);
+    var result = parseSafe(expression);
+    if (result.ok) { line(false, label + '  — accepted it'); return; }
+    var message = result.error.message;
+    var hit = message.toLowerCase().indexOf(String(needle).toLowerCase()) >= 0;
+    line(hit, label + (hit ? ' (' + message.slice(0, 70) + ')' : '  — message was "' + message + '", wanted "' + needle + '"'));
+  }
+
+  function valuesOf(expression, key) {
+    var result = parseSafe(expression);
+    if (!result.ok) return 'ERROR: ' + result.error.message;
+    for (var i = 0; i < result.fields.length; i++) {
+      if (result.fields[i].key === key) return result.fields[i].values;
+    }
+    return null;
+  }
+
+  function runsUtc(expression, fromIso, count) {
+    var result = CE.nextRuns(parseSafe(expression), {
+      from: new Date(fromIso), count: count || 5, utc: true
+    });
+    return result;
+  }
+
+  function stampsUtc(expression, fromIso, count) {
+    return runsUtc(expression, fromIso, count).runs.map(function (r) { return CE.formatRun(r, true); });
+  }
+
+  /* ---------------------------------------------------------------- */
+  section('field syntax: single, range, list, step');
+
+  eq('minute "0"', valuesOf('0 9 * * 1-5', 'minute'), [0]);
+  eq('hour "9"', valuesOf('0 9 * * 1-5', 'hour'), [9]);
+  eq('dow "1-5"', valuesOf('0 9 * * 1-5', 'dow'), [1, 2, 3, 4, 5]);
+  eq('minute "*/15"', valuesOf('*/15 * * * *', 'minute'), [0, 15, 30, 45]);
+  eq('minute "0-30/5"', valuesOf('0-30/5 * * * *', 'minute'), [0, 5, 10, 15, 20, 25, 30]);
+  eq('hour "9/2" steps to the field max (Vixie)', valuesOf('0 9/2 * * *', 'hour'), [9, 11, 13, 15, 17, 19, 21, 23]);
+  eq('minute "9/2" runs 9..59', valuesOf('9/2 * * * *', 'minute').slice(0, 3).concat(valuesOf('9/2 * * * *', 'minute').slice(-1)), [9, 11, 13, 59]);
+  eq('minute "5" alone is not a step', valuesOf('5 * * * *', 'minute'), [5]);
+  eq('list "1,15,30" sorts', valuesOf('30,1,15 * * * *', 'minute'), [1, 15, 30]);
+  eq('list collapses duplicates', valuesOf('5,5,1,1 * * * *', 'minute'), [1, 5]);
+  eq('mixed list "0,10-12,*/30"', valuesOf('0,10-12,*/30 * * * *', 'minute'), [0, 10, 11, 12, 30]);
+  eq('"*" fills the range', valuesOf('* * * * *', 'minute').length, 60);
+  eq('hour "*" is 0..23', valuesOf('* * * * *', 'hour').length, 24);
+  eq('dom "*" is 1..31', valuesOf('* * * * *', 'dom'), (function () { var a = []; for (var i = 1; i <= 31; i++) a.push(i); return a; }()));
+  eq('boundary "59 23 31 12 *" parses', [valuesOf('59 23 31 12 *', 'minute'), valuesOf('59 23 31 12 *', 'hour'), valuesOf('59 23 31 12 *', 'dom'), valuesOf('59 23 31 12 *', 'month')], [[59], [23], [31], [12]]);
+  eq('boundary "0 0 1 1 *" parses', [valuesOf('0 0 1 1 *', 'dom'), valuesOf('0 0 1 1 *', 'month')], [[1], [1]]);
+
+  /* ---------------------------------------------------------------- */
+  section('names');
+
+  eq('month "JAN"', valuesOf('0 0 1 JAN *', 'month'), [1]);
+  eq('month "DEC" case-insensitive', valuesOf('0 0 1 dec *', 'month'), [12]);
+  eq('month "JAN-JUN/2"', valuesOf('0 0 1 JAN-JUN/2 *', 'month'), [1, 3, 5]);
+  eq('dow "MON-FRI"', valuesOf('0 0 * * MON-FRI', 'dow'), [1, 2, 3, 4, 5]);
+  eq('dow "sun" case-insensitive', valuesOf('30 3 * * sun', 'dow'), [0]);
+  eq('dow "SAT"', valuesOf('0 0 * * SAT', 'dow'), [6]);
+  eq('dow "0" is Sunday', valuesOf('0 0 * * 0', 'dow'), [0]);
+  eq('dow "7" is Sunday too', valuesOf('0 0 * * 7', 'dow'), [0]);
+  eq('dow "0,7" collapses to one Sunday', valuesOf('0 0 * * 0,7', 'dow'), [0]);
+  eq('dow "5-7" includes Sunday as 0', valuesOf('0 0 * * 5-7', 'dow'), [0, 5, 6]);
+  rejects('MON * * * *', 'names are not allowed');
+  rejects('0 JAN * * *', 'names are not allowed');
+  rejects('0 0 MON * *', 'names are not allowed');
+  rejects('0 0 1 FOO *', 'not a month name');
+  rejects('0 0 * * FUNDAY', 'not a day-of-week name');
+
+  /* ---------------------------------------------------------------- */
+  section('aliases');
+
+  (function () {
+    var table = [
+      ['@yearly', '0 0 1 1 *'], ['@annually', '0 0 1 1 *'], ['@monthly', '0 0 1 * *'],
+      ['@weekly', '0 0 * * 0'], ['@daily', '0 0 * * *'], ['@midnight', '0 0 * * *'],
+      ['@hourly', '0 * * * *']
+    ];
+    for (var i = 0; i < table.length; i++) {
+      var alias = table[i][0];
+      var expected = table[i][1];
+      var got = parseSafe(alias);
+      eq(alias + ' expands to ' + expected, got.ok && got.expanded, expected);
+      var upper = parseSafe(alias.toUpperCase());
+      eq(alias.toUpperCase() + ' (case-insensitive)', upper.ok && upper.expanded, expected);
+      var direct = parseSafe(expected);
+      eq(alias + ' fields match ' + expected, got.fields.map(function (f) { return f.values; }),
+        direct.fields.map(function (f) { return f.values; }));
+    }
+  }());
+  ok('@reboot parses', parseSafe('@reboot').ok);
+  ok('@reboot is flagged as not a schedule', parseSafe('@reboot').reboot === true);
+  eq('@reboot has no run times', runsUtc('@reboot', '2026-08-08T12:00:00Z').runs.length, 0);
+  ok('@reboot result is marked reboot', runsUtc('@reboot', '2026-08-08T12:00:00Z').reboot === true);
+  rejects('@yearlyish', 'unknown alias');
+  rejects('@daily *', 'stand alone');
+
+  /* ---------------------------------------------------------------- */
+  section('day-of-month / day-of-week: all four star combinations');
+
+  (function () {
+    var both = parseSafe('0 0 * * *');
+    ok('"* / *": both star flags set', both.fields[2].star === true && both.fields[4].star === true);
+    var domOnly = parseSafe('0 0 1 * *');
+    ok('"1 / *": dom not starred, dow starred', domOnly.fields[2].star === false && domOnly.fields[4].star === true);
+    var dowOnly = parseSafe('0 0 * * MON');
+    ok('"* / MON": dom starred, dow not', dowOnly.fields[2].star === true && dowOnly.fields[4].star === false);
+    var neither = parseSafe('0 0 1 * MON');
+    ok('"1 / MON": neither starred', neither.fields[2].star === false && neither.fields[4].star === false);
+    var stepDom = parseSafe('0 0 */2 * MON');
+    ok('"*/2" counts as starred (literal star flag)', stepDom.fields[2].star === true);
+  }());
+
+  // Both star: every day.
+  eq('"0 0 * * *" runs on five consecutive days',
+    stampsUtc('0 0 * * *', '2026-08-08T12:00:00Z'),
+    ['Sun 2026-08-09 00:00 UTC', 'Mon 2026-08-10 00:00 UTC', 'Tue 2026-08-11 00:00 UTC',
+      'Wed 2026-08-12 00:00 UTC', 'Thu 2026-08-13 00:00 UTC']);
+
+  // dow star: day-of-month alone decides (AND).
+  eq('"0 0 1 * *" runs only on the 1st',
+    stampsUtc('0 0 1 * *', '2026-08-08T12:00:00Z'),
+    ['Tue 2026-09-01 00:00 UTC', 'Thu 2026-10-01 00:00 UTC', 'Sun 2026-11-01 00:00 UTC',
+      'Tue 2026-12-01 00:00 UTC', 'Fri 2027-01-01 00:00 UTC']);
+
+  // dom star: day-of-week alone decides (AND).
+  eq('"0 0 * * MON" runs only on Mondays',
+    stampsUtc('0 0 * * MON', '2026-08-08T12:00:00Z'),
+    ['Mon 2026-08-10 00:00 UTC', 'Mon 2026-08-17 00:00 UTC', 'Mon 2026-08-24 00:00 UTC',
+      'Mon 2026-08-31 00:00 UTC', 'Mon 2026-09-07 00:00 UTC']);
+
+  // Neither star: OR. The list must contain a non-Monday 1st and non-1st Mondays.
+  (function () {
+    var stamps = stampsUtc('0 0 1 * MON', '2026-08-08T12:00:00Z', 8);
+    var hasNonMondayFirst = false;
+    var hasNonFirstMonday = false;
+    for (var i = 0; i < stamps.length; i++) {
+      var isMonday = stamps[i].indexOf('Mon ') === 0;
+      var isFirst = /-01 /.test(stamps[i]);
+      if (isFirst && !isMonday) hasNonMondayFirst = true;
+      if (isMonday && !isFirst) hasNonFirstMonday = true;
+    }
+    ok('"0 0 1 * MON" includes a 1st that is not a Monday (OR branch)', hasNonMondayFirst, stamps.join(' | '));
+    ok('"0 0 1 * MON" includes a Monday that is not the 1st (OR branch)', hasNonFirstMonday, stamps.join(' | '));
+    eq('"0 0 1 * MON" starts with the next Monday', stamps[0], 'Mon 2026-08-10 00:00 UTC');
+    ok('"0 0 1 * MON" includes Tue 2026-09-01', stamps.indexOf('Tue 2026-09-01 00:00 UTC') >= 0, stamps.join(' | '));
+  }());
+
+  // Star-prefixed dom means AND even though the field is restricted.
+  (function () {
+    var stamps = stampsUtc('0 0 */2 * MON', '2026-08-08T12:00:00Z', 6);
+    var allMondays = stamps.every(function (s) { return s.indexOf('Mon ') === 0; });
+    ok('"0 0 */2 * MON" lists only Mondays (AND branch)', allMondays, stamps.join(' | '));
+    var allOddDays = stamps.every(function (s) { return parseInt(s.slice(12, 14), 10) % 2 === 1; });
+    ok('"0 0 */2 * MON" lists only odd days of the month', allOddDays, stamps.join(' | '));
+  }());
+
+  eq('day-rule note says OR when neither field is starred',
+    /or/i.test(CE.dayRuleNote(parseSafe('0 0 1 * MON'))), true);
+  eq('day-rule note says AND when dow is starred',
+    /and/i.test(CE.dayRuleNote(parseSafe('0 0 1 * *'))), true);
+  eq('day-rule note says AND when dom is starred',
+    /and/i.test(CE.dayRuleNote(parseSafe('0 0 * * MON'))), true);
+  eq('day-rule note says every day when both are starred',
+    /every day/i.test(CE.dayRuleNote(parseSafe('0 0 * * *'))), true);
+
+  /* ---------------------------------------------------------------- */
+  section('scheduler: sparse, dense and impossible schedules');
+
+  eq('"0 0 29 2 *" returns five leap-year Feb 29s',
+    stampsUtc('0 0 29 2 *', '2026-01-01T00:00:00Z'),
+    ['Tue 2028-02-29 00:00 UTC', 'Sun 2032-02-29 00:00 UTC', 'Fri 2036-02-29 00:00 UTC',
+      'Wed 2040-02-29 00:00 UTC', 'Mon 2044-02-29 00:00 UTC']);
+  ok('"0 0 29 2 *" years are all leap years',
+    stampsUtc('0 0 29 2 *', '2026-01-01T00:00:00Z').every(function (s) {
+      var y = parseInt(s.slice(4, 8), 10);
+      return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+    }));
+
+  (function () {
+    var started = Date.now();
+    var result = runsUtc('0 0 31 2 *', '2026-08-08T12:00:00Z');
+    var elapsed = Date.now() - started;
+    eq('"0 0 31 2 *" has no run at all', result.runs.length, 0);
+    ok('"0 0 31 2 *" reports an incomplete search', result.complete === false);
+    eq('"0 0 31 2 *" horizon is 50 years', result.horizonYears, 50);
+    ok('"0 0 31 2 *" finishes in under a second (' + elapsed + 'ms)', elapsed < 1000, elapsed + 'ms');
+  }());
+  eq('"0 0 30 2 *" has no run either', runsUtc('0 0 30 2 *', '2026-08-08T12:00:00Z').runs.length, 0);
+
+  eq('"* * * * *" crosses an hour boundary',
+    stampsUtc('* * * * *', '2026-03-10T10:57:30Z'),
+    ['Tue 2026-03-10 10:58 UTC', 'Tue 2026-03-10 10:59 UTC', 'Tue 2026-03-10 11:00 UTC',
+      'Tue 2026-03-10 11:01 UTC', 'Tue 2026-03-10 11:02 UTC']);
+  eq('"* * * * *" crosses midnight',
+    stampsUtc('* * * * *', '2026-03-10T23:57:00Z'),
+    ['Tue 2026-03-10 23:58 UTC', 'Tue 2026-03-10 23:59 UTC', 'Wed 2026-03-11 00:00 UTC',
+      'Wed 2026-03-11 00:01 UTC', 'Wed 2026-03-11 00:02 UTC']);
+  eq('"0 9 * * 1-5" lists five weekday mornings',
+    stampsUtc('0 9 * * 1-5', '2026-08-08T12:00:00Z'),
+    ['Mon 2026-08-10 09:00 UTC', 'Tue 2026-08-11 09:00 UTC', 'Wed 2026-08-12 09:00 UTC',
+      'Thu 2026-08-13 09:00 UTC', 'Fri 2026-08-14 09:00 UTC']);
+  ok('"0 9 * * 1-5" never lands on a weekend',
+    stampsUtc('0 9 * * 1-5', '2026-08-08T12:00:00Z', 20).every(function (s) {
+      return s.indexOf('Sat ') !== 0 && s.indexOf('Sun ') !== 0;
+    }));
+  eq('"0 0 1 1 *" is five consecutive New Year midnights',
+    stampsUtc('0 0 1 1 *', '2026-08-08T12:00:00Z'),
+    ['Fri 2027-01-01 00:00 UTC', 'Sat 2028-01-01 00:00 UTC', 'Mon 2029-01-01 00:00 UTC',
+      'Tue 2030-01-01 00:00 UTC', 'Wed 2031-01-01 00:00 UTC']);
+  eq('"59 23 31 12 *" is New Year\'s Eve',
+    stampsUtc('59 23 31 12 *', '2026-08-08T12:00:00Z', 2),
+    ['Thu 2026-12-31 23:59 UTC', 'Fri 2027-12-31 23:59 UTC']);
+  eq('"0 */6 * * *" is every sixth hour',
+    stampsUtc('0 */6 * * *', '2026-08-08T12:00:00Z', 4),
+    ['Sat 2026-08-08 18:00 UTC', 'Sun 2026-08-09 00:00 UTC', 'Sun 2026-08-09 06:00 UTC',
+      'Sun 2026-08-09 12:00 UTC']);
+  ok('a run exactly at "now" is not listed (future only)',
+    stampsUtc('* * * * *', '2026-08-08T12:00:00Z', 1)[0] === 'Sat 2026-08-08 12:01 UTC');
+  ok('run times strictly increase',
+    (function () {
+      var runs = runsUtc('*/15 9-17 * * 1-5', '2026-08-08T12:00:00Z', 5).runs;
+      for (var i = 1; i < runs.length; i++) if (runs[i].ms <= runs[i - 1].ms) return false;
+      return runs.length === 5;
+    }()));
+
+  /* ---------------------------------------------------------------- */
+  section('local time and daylight saving (zone-independent checks)');
+
+  (function () {
+    var now = new Date();
+    var local = CE.nextRuns(parseSafe('30 2 * * *'), { from: now, count: 5, utc: false });
+    eq('"30 2 * * *" finds five local runs', local.runs.length, 5);
+    // 02:30 is the wall-clock minute US zones skip each spring. A listed run
+    // must read back as the time it claims, in every zone.
+    var honest = local.runs.every(function (r) {
+      return r.date.getHours() === 2 && r.date.getMinutes() === 30 &&
+        r.date.getDate() === r.d && r.date.getMonth() + 1 === r.mo;
+    });
+    ok('every listed local 02:30 really is 02:30 on that date (skips spring-forward gaps)', honest);
+    var increasing = true;
+    for (var i = 1; i < local.runs.length; i++) {
+      if (local.runs[i].ms <= local.runs[i - 1].ms) increasing = false;
+    }
+    ok('local runs are strictly increasing (a repeated fall-back minute is listed once)', increasing);
+    var hourly = CE.nextRuns(parseSafe('0 * * * *'), { from: now, count: 30, utc: false });
+    var seen = {};
+    var noDuplicateWallClock = hourly.runs.every(function (r) {
+      var key = r.y + '-' + r.mo + '-' + r.d + ' ' + r.h + ':' + r.mi;
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    });
+    ok('no wall-clock minute is listed twice across 30 hourly runs', noDuplicateWallClock);
+  }());
+
+  /* ---------------------------------------------------------------- */
+  section('malformed input: never throws, always names the problem');
+
+  rejects('', 'empty expression');
+  rejects('   ', 'empty expression');
+  rejects('\t\t', 'empty expression');
+  rejects('*', '1 field');
+  rejects('* * *', '3 field');
+  rejects('* * * *', '4 field');
+  rejects('* * * * * *', '6 fields');
+  rejects('0 * * * * *', 'seconds');
+  rejects('* * * * * * *', '7 fields');
+  rejects('0 9 * * ', '4 field');
+
+  rejects('0 0 ? * *', 'quartz');
+  rejects('0 0 L * *', 'quartz');
+  rejects('0 0 15W * *', 'quartz');
+  rejects('0 0 LW * *', 'quartz');
+  rejects('0 0 * * 5#3', 'quartz');
+  rejects('0 0 C * *', 'quartz');
+
+  rejects('60 * * * *', 'outside 0–59');
+  rejects('* 24 * * *', 'outside 0–23');
+  rejects('0 0 32 * *', 'outside 1–31');
+  rejects('0 0 0 * *', 'outside 1–31');
+  rejects('0 0 * 13 *', 'outside 1–12');
+  rejects('0 0 * 0 *', 'outside 1–12');
+  rejects('0 0 * * 8', 'outside 0–7');
+
+  rejects('1- * * * *', 'malformed range');
+  rejects('-5 * * * *', 'malformed range');
+  rejects('1--5 * * * *', 'malformed range');
+  rejects('1-5-9 * * * *', 'malformed range');
+  rejects('*/ * * * *', 'missing a step');
+  rejects('*/0 * * * *', 'step');
+  rejects('*/x * * * *', 'names are not allowed');
+  rejects('0 0 * * */x', 'step');
+  rejects(', * * * *', 'empty item');
+  rejects('1,,2 * * * *', 'empty item');
+  rejects('1, * * * *', 'empty item');
+  rejects('5-1 * * * *', 'backwards');
+  rejects('0 0 * * FRI-MON', 'backwards');
+  rejects('** * * * *', '"**"');
+  rejects('*/1/2 * * * *', 'more than one');
+
+  rejects('🎉 * * * *', 'minute field');
+  rejects("';DROP TABLE users;-- * * * *", 'field');
+  rejects('0 9 * * 1-5;rm -rf /', 'field');
+  rejects(new Array(10001).join('x'), 'characters long');
+  rejects('0\u00A09 * * *', 'non-breaking');       // NBSP between fields
+  rejects('0 9 * * 1-5\u00A0', 'non-breaking');    // trailing NBSP survives trim
+  rejects('0 9 * *\u30001-5', 'non-breaking');     // ideographic space
+  rejects(null, 'no expression');
+  rejects(undefined, 'no expression');
+  rejects(42, 'no expression');
+
+  ok('tabs separate fields', parseSafe('0\t9\t*\t*\t1-5').ok);
+  ok('runs of spaces separate fields', parseSafe('0   9  *  *  1-5').ok);
+  ok('leading and trailing whitespace is trimmed, not an error', parseSafe('   0 9 * * 1-5   ').ok);
+  eq('trimmed expression is normalised', parseSafe('  0   9 * * 1-5 ').expression, '0 9 * * 1-5');
+
+  /* ---------------------------------------------------------------- */
+  section('sentences and field rows');
+
+  eq('"0 9 * * 1-5" reads as specified', CE.describe(parseSafe('0 9 * * 1-5')),
+    'At 09:00, Monday through Friday.');
+  eq('"@reboot" sentence', CE.describe(parseSafe('@reboot')),
+    'Once, when the machine boots. There is no clock time to predict.');
+  ok('"0 0 1 * MON" sentence says "or"', / or /.test(CE.describe(parseSafe('0 0 1 * MON'))),
+    CE.describe(parseSafe('0 0 1 * MON')));
+  ok('"0 0 */2 * MON" sentence does not say "or"', !/, or /.test(CE.describe(parseSafe('0 0 */2 * MON'))),
+    CE.describe(parseSafe('0 0 */2 * MON')));
+  eq('"* * * * *" sentence', CE.describe(parseSafe('* * * * *')), 'Every minute.');
+  eq('"*/15 * * * *" sentence', CE.describe(parseSafe('*/15 * * * *')), 'Every 15 minutes.');
+  eq('"0 */6 * * *" lists the clock times', CE.describe(parseSafe('0 */6 * * *')),
+    'At 00:00, 06:00, 12:00 and 18:00.');
+  eq('"30 3 * * SUN" sentence', CE.describe(parseSafe('30 3 * * SUN')), 'At 03:30, on Sunday.');
+  eq('"0 0 1 * *" sentence', CE.describe(parseSafe('0 0 1 * *')), 'At 00:00, on day 1 of the month.');
+  eq('"@daily" sentence', CE.describe(parseSafe('@daily')), 'At 00:00.');
+  eq('field rows count', CE.fieldRows(parseSafe('0 9 * * 1-5')).length, 5);
+  eq('field row names', CE.fieldRows(parseSafe('0 9 * * 1-5')).map(function (r) { return r.name; }),
+    ['minute', 'hour', 'day-of-month', 'month', 'day-of-week']);
+  eq('field row raw text is the text that was typed',
+    CE.fieldRows(parseSafe('*/15 9-17 1,15 JAN-JUN/2 MON-FRI')).map(function (r) { return r.raw; }),
+    ['*/15', '9-17', '1,15', 'JAN-JUN/2', 'MON-FRI']);
+  eq('day-of-week row mentions the 0/7 Sunday rule',
+    /0 and 7 both mean Sunday/.test(CE.fieldRows(parseSafe('0 0 * * 0'))[4].meaning), true);
+
+  (function () {
+    var junk = /undefined|NaN|\[object Object\]/;
+    var expressions = ['*/15 * * * *', '0 9 * * 1-5', '0 0 1 * *', '30 3 * * SUN', '0 */6 * * *',
+      '@daily', '@reboot', '@weekly', '@hourly', '0 0 29 2 *', '0 0 1 * MON', '0 0 */2 * MON',
+      '* * * * *', '59 23 31 12 *', '0-30/5 9/2 1,15 JAN-JUN/2 0,7', '0 0 * * 7'];
+    for (var i = 0; i < expressions.length; i++) {
+      var parsed = parseSafe(expressions[i]);
+      var text = CE.describe(parsed) + ' ' + CE.dayRuleNote(parsed) + ' ' +
+        CE.fieldRows(parsed).map(function (r) { return r.name + r.raw + r.meaning; }).join(' ');
+      ok('no undefined/NaN/[object Object] in "' + expressions[i] + '"', !junk.test(text), text.slice(0, 90));
+    }
+  }());
+
+  /* ---------------------------------------------------------------- */
+  section('formatting');
+
+  ok('formatRun shape', /^[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/.test(
+    stampsUtc('0 9 * * 1-5', '2026-08-08T12:00:00Z', 1)[0]),
+    stampsUtc('0 9 * * 1-5', '2026-08-08T12:00:00Z', 1)[0]);
+  ok('formatRun drops the UTC label in local mode', CE.formatRun(
+    { y: 2026, mo: 8, d: 10, h: 9, mi: 0, dow: 1 }, false) === 'Mon 2026-08-10 09:00');
+  eq('relativeHint: minutes', CE.relativeHint(0, 14 * 60000), 'in 14 minutes');
+  eq('relativeHint: one minute', CE.relativeHint(0, 60000), 'in 1 minute');
+  eq('relativeHint: under a minute', CE.relativeHint(0, 20000), 'in less than a minute');
+  eq('relativeHint: hours', CE.relativeHint(0, 5 * 3600000), 'in 5 hours');
+  eq('relativeHint: days', CE.relativeHint(0, 3 * 86400000), 'in 3 days');
+  eq('relativeHint: months', CE.relativeHint(0, 120 * 86400000), 'in 4 months');
+  eq('relativeHint: years', CE.relativeHint(0, 800 * 86400000), 'in 2 years');
+
+  /* ---------------------------------------------------------------- */
+  var summary = document.getElementById('summary');
+  summary.textContent = passed + ' passed, ' + failed + ' failed';
+  summary.className = failed === 0 ? 'ok' : 'bad';
+  document.title = 'cron-explain tests — ' + passed + ' passed, ' + failed + ' failed';
+  // Read by the browser check that ships this build; harmless otherwise.
+  window.__cronExplainTestResults = { passed: passed, failed: failed };
+}());
+</script>
+</body>
+</html>

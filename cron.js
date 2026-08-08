@@ -383,18 +383,23 @@
   }
 
   function dayRuleNote(parsed) {
+    // Errors and @reboot have no day fields; callers may hand either over.
+    if (!parsed || !parsed.ok || parsed.reboot || parsed.fields.length !== 5) return '';
     var dom = fieldOf(parsed, 'dom');
     var dow = fieldOf(parsed, 'dow');
-    if (dom.star && dow.star) {
-      return 'Both day fields start with *, so every day matches.';
+    if (!dom.star && !dow.star) {
+      return 'Neither day field starts with *, so Vixie cron matches a day when day-of-month OR day-of-week matches — not both.';
     }
-    if (dom.star) {
-      return 'Day-of-month starts with *, so the day-of-week field alone narrows the days (AND).';
+    if (dom.raw === '*' && dow.raw === '*') {
+      return 'Both day fields are *, so every day matches.';
     }
-    if (dow.star) {
-      return 'Day-of-week starts with *, so the day-of-month field alone narrows the days (AND).';
+    if (dom.raw === '*') {
+      return 'Day-of-month is *, so the day-of-week field alone decides which days match (AND).';
     }
-    return 'Neither day field starts with *, so Vixie cron matches a day when day-of-month OR day-of-week matches — not both.';
+    if (dow.raw === '*') {
+      return 'Day-of-week is *, so the day-of-month field alone decides which days match (AND).';
+    }
+    return 'A day field starts with *, so Vixie cron requires both day fields to match (AND), not either one.';
   }
 
   function describe(parsed) {
@@ -524,11 +529,13 @@
 
       var matches = false;
       if (monthSet[cm]) {
-        if (dom.star && dow.star) matches = true;
-        else if (dom.star) matches = !!dowSet[cw];
-        else if (dow.star) matches = !!domSet[cd];
-        // Vixie: with neither field starred, either one matching is enough.
-        else matches = !!domSet[cd] || !!dowSet[cw];
+        // Vixie: if either raw day field starts with *, both must match; only
+        // when neither is starred does either one matching suffice. With a
+        // plain "*" the AND branch collapses to the other field, which is why
+        // "* * MON" is Mondays and "*/2 * MON" is odd-numbered Mondays.
+        matches = (dom.star || dow.star)
+          ? (!!domSet[cd] && !!dowSet[cw])
+          : (!!domSet[cd] || !!dowSet[cw]);
       }
 
       if (matches) {
