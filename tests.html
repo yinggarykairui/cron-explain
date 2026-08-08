@@ -590,13 +590,13 @@
   // A month clause must scope both halves of an OR, so it leads the sentence.
   eq('"0 0 29 2 5" scopes February over both day branches',
     CE.describe(parseSafe('0 0 29 2 5')),
-    'In February, at 00:00 on day 29 of the month or on Friday.');
+    'In February, at 00:00, on day 29 of the month or on Friday.');
   eq('"0 0 1 6 MON-FRI" scopes June over both day branches',
     CE.describe(parseSafe('0 0 1 6 MON-FRI')),
-    'In June, at 00:00 on day 1 of the month or Monday through Friday.');
+    'In June, at 00:00, on day 1 of the month or Monday through Friday.');
   eq('"*/30 * 1 12 SUN" keeps the leading month with a step time phrase',
     CE.describe(parseSafe('*/30 * 1 12 SUN')),
-    'In December, every 30 minutes on day 1 of the month or on Sunday.');
+    'In December, every 30 minutes, on day 1 of the month or on Sunday.');
   eq('a month with no OR branch still reads as a trailing clause',
     CE.describe(parseSafe('0 0 29 2 *')), 'At 00:00, on day 29 of the month, in February.');
   eq('an AND branch with a month stays trailing',
@@ -632,6 +632,135 @@
   }());
 
   /* ---------------------------------------------------------------- */
+  section('step forms, degenerate forms and truncated lists');
+
+  // A "*/S" step that does not divide its range is not a gap of S. The headline
+  // has to say something the run list underneath it confirms.
+  eq('"*/45" names its minutes instead of claiming a 45-minute gap',
+    CE.describe(parseSafe('*/45 * * * *')), 'At minutes 0 and 45 of every hour.');
+  eq('the runs under that sentence are 45 and 15 minutes apart, as it implies',
+    stampsUtc('*/45 * * * *', '2026-08-08T20:10:00Z', 4),
+    ['Sat 2026-08-08 20:45 UTC', 'Sat 2026-08-08 21:00 UTC',
+      'Sat 2026-08-08 21:45 UTC', 'Sat 2026-08-08 22:00 UTC']);
+  eq('"*/7" minutes', CE.describe(parseSafe('*/7 * * * *')),
+    'At minutes 0, 7, 14, 21, 28, 35, 42 (and 2 more) of every hour.');
+  eq('"*/25" minutes', CE.describe(parseSafe('*/25 * * * *')),
+    'At minutes 0, 25 and 50 of every hour.');
+  eq('"*/40" minutes', CE.describe(parseSafe('*/40 * * * *')),
+    'At minutes 0 and 40 of every hour.');
+  eq('"*/50" minutes', CE.describe(parseSafe('*/50 * * * *')),
+    'At minutes 0 and 50 of every hour.');
+  eq('a step that does divide the hour still reads as a gap',
+    CE.describe(parseSafe('*/20 * * * *')), 'Every 20 minutes.');
+  eq('"*/45" with one hour reads as clock times',
+    CE.describe(parseSafe('*/45 9 * * *')), 'At 09:00 and 09:45.');
+  (function () {
+    var wrong = [];
+    for (var s = 2; s <= 59; s++) {
+      var text = CE.describe(parseSafe('*/' + s + ' * * * *'));
+      if (/Every \d+ minutes/.test(text) && 60 % s !== 0) wrong.push('*/' + s + ': ' + text);
+    }
+    ok('no "Every N minutes" headline for a step that does not divide the hour',
+      wrong.length === 0, wrong.join(' | '));
+  }());
+  eq('the field table names the restart for a step that does not divide',
+    CE.fieldRows(parseSafe('*/45 * * * *'))[0].meaning,
+    'Every 45th minute, restarting each hour: 0 and 45');
+  eq('and says nothing extra for a step that does divide',
+    CE.fieldRows(parseSafe('*/15 * * * *'))[0].meaning,
+    'Every 15th minute: 0, 15, 30 and 45');
+
+  // "*/1" is "*" with extra characters: it restricts nothing, so it must not
+  // add a clause. "on every 1st day of the month" means every day.
+  eq('"0 0 */1 * *" is every day, not "every 1st day"',
+    CE.describe(parseSafe('0 0 */1 * *')), 'At 00:00.');
+  eq('"0 0 15 */1 *" drops the "every 1st month" clause',
+    CE.describe(parseSafe('0 0 15 */1 *')), 'At 00:00, on day 15 of the month.');
+  eq('"0 0 15 * */1" does not say "only on every day of the week"',
+    CE.describe(parseSafe('0 0 15 * */1')), 'At 00:00, on day 15 of the month.');
+  eq('"*/1 */1 */1 */1 */1" is every minute', CE.describe(parseSafe('*/1 */1 */1 */1 */1')),
+    'Every minute.');
+  eq('the field table reads "*/1" as the whole range',
+    CE.fieldRows(parseSafe('*/1 */1 */1 */1 */1')).map(function (r) { return r.meaning; }),
+    ['Every minute (0–59)', 'Every hour (0–23)', 'Every day of the month', 'Every month',
+      'Every day of the week']);
+  (function () {
+    var junk = [];
+    var expressions = ['0 0 */1 * *', '0 0 15 */1 *', '0 0 15 * */1', '*/1 * * * *',
+      '0 0 */1 */1 */1', '0 0 1 */1 MON'];
+    for (var i = 0; i < expressions.length; i++) {
+      var parsed = parseSafe(expressions[i]);
+      var text = CE.describe(parsed) + ' ' +
+        CE.fieldRows(parsed).map(function (r) { return r.meaning; }).join(' ');
+      if (/every 1st|every 1 |1st minute|1st hour|1st month|1st day/i.test(text)) {
+        junk.push(expressions[i] + ': ' + text);
+      }
+    }
+    ok('no "every 1st" phrasing survives anywhere', junk.length === 0, junk.join(' | '));
+  }());
+
+  // A truncated list must not strand the noun that follows it.
+  eq('a truncated day list keeps "of the month" attached to "days"',
+    CE.describe(parseSafe('0 0 1,3,5,7,9,11,13,15,17 * *')),
+    'At 00:00, on days 1, 3, 5, 7, 9, 11, 13 (and 2 more) of the month.');
+  eq('the field table truncates the same way',
+    CE.fieldRows(parseSafe('0 0 1,3,5,7,9,11,13,15,17 * *'))[2].meaning,
+    'Days 1, 3, 5, 7, 9, 11, 13 (and 2 more)');
+  (function () {
+    var expressions = ['0 0 1,3,5,7,9,11,13,15,17 * *', '*/7 * * * *', '*/7 * 1,3,5,7,9,11,13,15,17 * *',
+      '5 1,3,5,7,9,11,13,15,17,19,21 * * *'];
+    var stranded = [];
+    for (var i = 0; i < expressions.length; i++) {
+      var parsed = parseSafe(expressions[i]);
+      var text = CE.describe(parsed) + ' ' +
+        CE.fieldRows(parsed).map(function (r) { return r.meaning; }).join(' ');
+      if (/\d+ more (of|days|minutes)/.test(text)) stranded.push(expressions[i] + ': ' + text);
+    }
+    ok('no truncated list strands a trailing noun', stranded.length === 0, stranded.join(' | '));
+  }());
+
+  // The month leads on the OR branch (B2), and the time phrase is closed off
+  // with a comma so "or on Friday" cannot dangle off the hour phrase.
+  eq('a month, an hour range and an OR day rule read as three clauses',
+    CE.describe(parseSafe('* 9-17 15 2 FRI')),
+    'In February, every minute of hours 9 through 17, on day 15 of the month or on Friday.');
+  eq('the same shape with a minute list',
+    CE.describe(parseSafe('0,30 9-17 15 2 FRI')),
+    'In February, at minutes 0 and 30 of hours 9 through 17, on day 15 of the month or on Friday.');
+
+  // Assertions that exist to kill named mutants (see README): ordinal's "st"
+  // branch, compactList's run threshold, and relativeHint's 48-hour boundary.
+  eq('an ordinal ending in 1 is "21st", not "21th"',
+    CE.describe(parseSafe('0 0 */21 * *')), 'At 00:00, on every 21st day of the month.');
+  eq('ordinals 2nd, 3rd and 11th', [CE.fieldRows(parseSafe('*/2 * * * *'))[0].meaning,
+    CE.fieldRows(parseSafe('*/3 * * * *'))[0].meaning,
+    CE.fieldRows(parseSafe('*/11 * * * *'))[0].meaning].map(function (m) { return m.split(':')[0]; }),
+    ['Every 2nd minute', 'Every 3rd minute', 'Every 11th minute, restarting each hour']);
+  eq('two consecutive values are a pair, not a run',
+    CE.describe(parseSafe('0 0 * * 1,2')), 'At 00:00, on Monday and Tuesday.');
+  eq('three consecutive values are a run',
+    CE.describe(parseSafe('0 0 * * 1-3')), 'At 00:00, Monday through Wednesday.');
+  eq('two consecutive days in the table', CE.fieldRows(parseSafe('0 0 1,2 * *'))[2].meaning,
+    'Days 1 and 2');
+  eq('three consecutive days in the table', CE.fieldRows(parseSafe('0 0 1-3 * *'))[2].meaning,
+    'Days 1 through 3');
+
+  // Four more gaps the same mutation run found: the length cap, a one-value
+  // range, the "A-B/S" step form in the sentence, and the minutes/hours seam.
+  rejects(new Array(202).join('x'), 'at most ' + CE.MAX_LENGTH);
+  eq('"5-5" is a range of one value, not a backwards range', valuesOf('0 5-5 * * *', 'hour'), [5]);
+  eq('"A-B/S" is not a plain star step in the sentence',
+    CE.describe(parseSafe('0-30/5 * * * *')), 'At minutes 0, 5, 10, 15, 20, 25 and 30 of every hour.');
+  eq('"9-17/2" hours read as clock times', CE.describe(parseSafe('0 9-17/2 * * *')),
+    'At 09:00, 11:00, 13:00, 15:00 and 17:00.');
+  eq('the field table keeps "A-B/S" out of the step wording',
+    CE.fieldRows(parseSafe('0-30/5 * * * *'))[0].meaning, 'Minutes 0, 5, 10, 15, 20, 25 and 30');
+  rejects('0 0 # * *', 'Quartz');
+  eq('relativeHint: 45 minutes stays in minutes', CE.relativeHint(0, 45 * 60000), 'in 45 minutes');
+  eq('relativeHint: 59 minutes stays in minutes', CE.relativeHint(0, 59 * 60000), 'in 59 minutes');
+  eq('relativeHint: 60 minutes is one hour', CE.relativeHint(0, 60 * 60000), 'in 1 hour');
+
+  /* ---------------------------------------------------------------- */
   section('formatting');
 
   ok('formatRun shape', /^[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/.test(
@@ -643,6 +772,13 @@
   eq('relativeHint: one minute', CE.relativeHint(0, 60000), 'in 1 minute');
   eq('relativeHint: under a minute', CE.relativeHint(0, 20000), 'in less than a minute');
   eq('relativeHint: hours', CE.relativeHint(0, 5 * 3600000), 'in 5 hours');
+  // The hint stays in hours right up to 48, so a run "in 36 hours" is never
+  // rounded down to "in 1 days". These pin both sides of that boundary.
+  eq('relativeHint: 24 hours is still hours', CE.relativeHint(0, 24 * 3600000), 'in 24 hours');
+  eq('relativeHint: 36 hours is still hours', CE.relativeHint(0, 36 * 3600000), 'in 36 hours');
+  eq('relativeHint: 47h59m is the last hour reading',
+    CE.relativeHint(0, 47 * 3600000 + 59 * 60000), 'in 47 hours');
+  eq('relativeHint: 48 hours flips to days', CE.relativeHint(0, 48 * 3600000), 'in 2 days');
   eq('relativeHint: days', CE.relativeHint(0, 3 * 86400000), 'in 3 days');
   eq('relativeHint: months', CE.relativeHint(0, 120 * 86400000), 'in 4 months');
   eq('relativeHint: years', CE.relativeHint(0, 800 * 86400000), 'in 2 years');

@@ -292,7 +292,10 @@
     }
     var max = limit || 8;
     if (groups.length > max) {
-      return groups.slice(0, max - 1).join(', ') + ' and ' + (groups.length - (max - 1)) + ' more';
+      // The tail is parenthesised so that a clause continuing after the list —
+      // "of the month", "of every hour" — still attaches to the noun in front
+      // of the list rather than to "and 2 more".
+      return groups.slice(0, max - 1).join(', ') + ' (and ' + (groups.length - (max - 1)) + ' more)';
     }
     if (groups.length === 1) return groups[0];
     return groups.slice(0, -1).join(', ') + ' and ' + groups[groups.length - 1];
@@ -325,8 +328,11 @@
     if (everyMinute && everyHour) return 'Every minute';
     if (everyMinute) return 'Every minute of ' + hoursNoun(hour);
 
+    // "Every N minutes" is a claim about the gaps, so it is only true when N
+    // divides the hour. "*/45" fires at :00 and :45 — a 45-minute gap, then a
+    // 15-minute one — so it falls through and is named by its minutes instead.
     var step = starStep(minute.raw);
-    if (step) {
+    if (step && 60 % step === 0) {
       var head = 'Every ' + (step === 1 ? 'minute' : step + ' minutes');
       return everyHour ? head : head + ' of ' + hoursNoun(hour);
     }
@@ -347,8 +353,15 @@
     return 'At ' + minutesNoun(minute) + ' of ' + hoursNoun(hour);
   }
 
+  // "*/1" selects the whole range, exactly as "*" does, so it restricts
+  // nothing and must not add a clause. "on every 1st day of the month" and
+  // "in every 1st month" are both just noise around "every".
+  function isEveryValue(field) {
+    return field.raw === '*' || starStep(field.raw) === 1;
+  }
+
   function domPhrase(dom) {
-    if (dom.raw === '*') return '';
+    if (isEveryValue(dom)) return '';
     var step = starStep(dom.raw);
     if (step) return 'on every ' + ordinal(step) + ' day of the month';
     return 'on ' + (dom.values.length === 1 ? 'day ' : 'days ') +
@@ -356,7 +369,7 @@
   }
 
   function dowPhrase(dow) {
-    if (dow.raw === '*') return '';
+    if (isEveryValue(dow)) return '';
     if (dow.values.length === 7) return 'on every day of the week';
     var text = compactList(dow.values, dayName);
     // A run reads as "Monday through Friday"; anything else takes "on".
@@ -364,7 +377,7 @@
   }
 
   function monthPhrase(month) {
-    if (month.raw === '*') return '';
+    if (isEveryValue(month)) return '';
     var step = starStep(month.raw);
     if (step) return 'in every ' + ordinal(step) + ' month';
     return 'in ' + compactList(month.values, monthName);
@@ -422,13 +435,15 @@
     // On the OR branch the sentence carries two alternative day rules. A month
     // clause tacked on the end reads as if it qualified only the second one
     // ("on day 29 of the month, or on Friday, in February"), so a restricted
-    // month leads instead and scopes both.
+    // month leads instead and scopes both. The comma after the time phrase is
+    // load-bearing: without it "every minute of hours 9 through 17 on day 15"
+    // binds as one clause and "or on Friday" is left dangling.
     if (month && !dom.star && !dow.star) {
       var d = domPhrase(dom);
       var w = dowPhrase(dow);
       if (d && w) {
         return month.charAt(0).toUpperCase() + month.slice(1) + ', ' +
-          time.charAt(0).toLowerCase() + time.slice(1) + ' ' + d + ' or ' + w + '.';
+          time.charAt(0).toLowerCase() + time.slice(1) + ', ' + d + ' or ' + w + '.';
       }
     }
 
@@ -439,27 +454,37 @@
     return parts.join(', ') + '.';
   }
 
+  // A step that does not divide its range runs out before the range does and
+  // starts again from the bottom: "*/45" is minutes 0 and 45, then the hour
+  // rolls over. Saying so keeps the table and the run list from disagreeing.
+  function stepMeaning(step, noun, span, cycle, values, nameFn) {
+    return 'Every ' + ordinal(step) + ' ' + noun +
+      (span % step === 0 ? '' : ', restarting each ' + cycle) +
+      ': ' + compactList(values, nameFn);
+  }
+
   function meaningOf(field) {
     var step = starStep(field.raw);
+    var everything = isEveryValue(field);
     switch (field.key) {
       case 'minute':
-        if (field.raw === '*') return 'Every minute (0–59)';
-        if (step) return 'Every ' + ordinal(step) + ' minute: ' + compactList(field.values, numberName);
+        if (everything) return 'Every minute (0–59)';
+        if (step) return stepMeaning(step, 'minute', 60, 'hour', field.values, numberName);
         return (field.values.length === 1 ? 'Minute ' : 'Minutes ') + compactList(field.values, numberName);
       case 'hour':
-        if (field.raw === '*') return 'Every hour (0–23)';
-        if (step) return 'Every ' + ordinal(step) + ' hour: ' + compactList(field.values, numberName);
+        if (everything) return 'Every hour (0–23)';
+        if (step) return stepMeaning(step, 'hour', 24, 'day', field.values, numberName);
         return (field.values.length === 1 ? 'Hour ' : 'Hours ') + compactList(field.values, numberName);
       case 'dom':
-        if (field.raw === '*') return 'Every day of the month';
-        if (step) return 'Every ' + ordinal(step) + ' day: ' + compactList(field.values, numberName);
+        if (everything) return 'Every day of the month';
+        if (step) return stepMeaning(step, 'day', 31, 'month', field.values, numberName);
         return (field.values.length === 1 ? 'Day ' : 'Days ') + compactList(field.values, numberName);
       case 'month':
-        if (field.raw === '*') return 'Every month';
-        if (step) return 'Every ' + ordinal(step) + ' month: ' + compactList(field.values, monthName);
+        if (everything) return 'Every month';
+        if (step) return stepMeaning(step, 'month', 12, 'year', field.values, monthName);
         return compactList(field.values, monthName);
       default:
-        if (field.raw === '*') return 'Every day of the week';
+        if (everything) return 'Every day of the week';
         return compactList(field.values, dayName) + (field.values.indexOf(0) >= 0 ? ' (0 and 7 both mean Sunday)' : '');
     }
   }
@@ -577,9 +602,13 @@
             }
             var ms = at.getTime();
             if (ms <= fromMs) continue;
-            // A repeated wall-clock minute (fall back) resolves to its first
-            // instant, so it is listed once; this keeps the list increasing.
-            if (runs.length && ms <= runs[runs.length - 1].ms) continue;
+            // A wall-clock minute repeated by a fall-back is listed once, but
+            // nothing here enforces that: new Date(y, mo, d, h, mi) resolves an
+            // ambiguous local time to its first instant, so the second pass is
+            // never constructed. Candidates are generated in ascending
+            // wall-clock order, and each one maps to a strictly later instant,
+            // so the list increases on its own. A guard against a non-increasing
+            // ms used to sit here; it never fired in any zone.
             runs.push({ ms: ms, date: at, y: cy, mo: cm, d: cd, h: h, mi: m, dow: cw });
           }
         }
