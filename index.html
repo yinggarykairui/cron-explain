@@ -244,10 +244,14 @@
   </fieldset>
   <p class="muted" id="zoneline"></p>
   <ol id="runs"></ol>
+  <!-- Fixed text, always on screen. It is how this page picks the times, so it
+       holds whether the list is full or empty and whichever zone is selected;
+       showing and hiding it is what moved the page under Share and the footer
+       for three cycles. -->
   <p class="note" id="dstnote">
-    Daylight saving, in local time: when the clock jumps forward, the minutes it skips are
-    not listed. When the clock goes back, a minute that happens twice is listed once. These
-    are the times a wall clock shows. Another cron may choose differently.
+    Daylight saving. Local times are wall-clock times: a minute the clock skips going
+    forward is not listed, and a minute that happens twice going back is listed once.
+    UTC never shifts, so a list in UTC has neither. Another cron may choose differently.
   </p>
 
   <h2>Share</h2>
@@ -287,7 +291,6 @@
   var dayRuleEl = document.getElementById('dayrule');
   var staleEl = document.getElementById('stale');
   var runsEl = document.getElementById('runs');
-  var dstNoteEl = document.getElementById('dstnote');
   var examplesEl = document.getElementById('examples');
   var copyBtn = document.getElementById('copy');
   var copyStatus = document.getElementById('copystatus');
@@ -438,14 +441,13 @@
     rowsEl.appendChild(tr);
   }
 
-  // Returns how many real run times are on screen.
   function renderRuns(parsed, utc) {
     clear(runsEl);
     var now = new Date();
     var result = CE.nextRuns(parsed, { from: now, count: 5, utc: utc });
     if (result.reboot) {
       emptyRun('No run times: @reboot fires when the machine boots, not on a clock.');
-      return 0;
+      return;
     }
     for (var i = 0; i < result.runs.length; i++) {
       var run = result.runs[i];
@@ -466,15 +468,6 @@
     if (!result.complete) {
       emptyRun('No run in the next ' + result.horizonYears + ' years.');
     }
-    return result.runs.length;
-  }
-
-  // The daylight-saving note explains how the times in the list were picked,
-  // so it belongs with the list and goes only when the list holds no times.
-  // Hiding it on a keystroke that flips valid/invalid, or on a change of
-  // timezone, pulled 115px out from under everything below it at 360px.
-  function showRuns(parsed, utc) {
-    dstNoteEl.hidden = renderRuns(parsed, utc) === 0;
   }
 
   function expandedText(parsed) {
@@ -537,7 +530,7 @@
     pinAnswer();
     if (lastGood) {
       setStale(true);
-      showRuns(lastGood, isUtc());
+      renderRuns(lastGood, isUtc());
       return;
     }
     // Nothing has parsed yet — a cold load with a bad hash. There is nothing to
@@ -548,7 +541,6 @@
     setDayRule('The day-of-month / day-of-week rule needs an expression that parses.');
     clear(runsEl);
     emptyRun('No run times: the expression above did not parse.');
-    dstNoteEl.hidden = true;
   }
 
   function renderOnce() {
@@ -591,7 +583,7 @@
       setDayRule(CE.dayRuleNote(parsed));
     }
 
-    showRuns(parsed, utc);
+    renderRuns(parsed, utc);
   }
 
   // One try/catch around the whole render: an unexpected failure becomes a
