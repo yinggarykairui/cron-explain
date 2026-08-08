@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>cron-explain — read a cron expression in English</title>
+<!-- An empty data: icon. Without it every load spends a request on a 404. -->
+<link rel="icon" href="data:,">
 <style>
   /* One accent colour, system fonts, ~62ch measure. prefers-color-scheme
      only: no toggle, no stored preference. */
@@ -12,6 +14,9 @@
     --fg: #1b1b1a;
     --muted: #5d5d58;
     --rule: #dcdcd6;
+    /* --rule separates rows; --edge draws controls, so it has to clear the
+       3:1 non-text contrast minimum against --bg. This one is 3.28:1. */
+    --edge: #8d8d86;
     --accent: #0a5ec7;
     --error: #a41c1c;
   }
@@ -21,6 +26,7 @@
       --fg: #e8e8e4;
       --muted: #a0a09a;
       --rule: #33343a;
+      --edge: #686970;  /* 3.28:1 on --bg */
       --accent: #7db3ff;
       --error: #ff9b93;
     }
@@ -46,13 +52,15 @@
   .note { color: var(--muted); font-size: .85rem; line-height: 1.55; }
   /* A rejected expression leaves the breakdown and the run list in place so the
      page does not lurch, but greyed and labelled: they are last-known-good. */
-  .stale { color: var(--muted); font-size: .9rem; margin: .25rem 0 0; }
-  .is-stale, .is-stale * { color: var(--muted); }
+  .stale { color: var(--muted); font-size: .85rem; line-height: 1.5; margin: .2rem 0 0; }
   code, .mono, input#expr, .stamp, td.raw, .example {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
 
-  label.field-label { display: block; font-size: .85rem; color: var(--muted); margin-top: 1.5rem; }
+  /* Everything above the input is what pushes the answer off a phone screen
+     with the keyboard open, so the label carries one word and the field order
+     lives in the lede and the placeholder. */
+  label.field-label { display: block; font-size: .85rem; color: var(--muted); margin-top: 1rem; }
   input#expr {
     width: 100%;
     margin-top: .3rem;
@@ -60,35 +68,50 @@
     font-size: 1rem;
     color: var(--fg);
     background: transparent;
-    border: 1px solid var(--rule);
+    border: 1px solid var(--edge);
     border-radius: 4px;
   }
   input#expr:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
 
-  .sentence { font-size: 1.15rem; line-height: 1.5; margin: 1rem 0 .25rem; }
-  .sentence.is-error { color: var(--error); font-size: 1rem; }
+  /* The sentence is the payload, so it outweighs everything above it. The
+     answer block reserves enough height for a two-line error plus the
+     last-parsed line, so a keystroke that flips valid/invalid moves nothing. */
+  .answer { min-height: 4.9rem; margin: 1rem 0 0; }
+  .sentence { font-size: 1.35rem; font-weight: 500; line-height: 1.4; margin: 0; }
+  .sentence.is-error { color: var(--error); font-size: 1rem; font-weight: 400; line-height: 1.5; }
 
-  fieldset { border: 0; padding: 0; margin: 1.25rem 0 0; }
+  fieldset { border: 0; padding: 0; margin: .5rem 0 0; }
   legend { padding: 0; font-size: .85rem; color: var(--muted); }
-  fieldset label { margin-right: 1rem; white-space: nowrap; }
+  /* 19px of radio was the smallest tap target on a page of 34px buttons. */
+  fieldset label { display: inline-flex; align-items: center; gap: .4rem;
+                   min-height: 34px; padding-right: .75rem; white-space: nowrap; }
+  fieldset input[type="radio"] { width: 18px; height: 18px; margin: 0; }
 
   table { width: 100%; border-collapse: collapse; font-size: .9rem; }
   th { text-align: left; font-weight: 600; font-size: .8rem; color: var(--muted);
        border-bottom: 1px solid var(--rule); padding: .35rem .5rem .35rem 0; }
   td { padding: .4rem .5rem .4rem 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
   /* Long raw fields and long meanings are the two things that force sideways
-     scroll at 360px, so both are allowed to break anywhere. */
-  td.raw { color: var(--accent); overflow-wrap: anywhere; }
+     scroll at 360px, so both are allowed to break anywhere. The accent is
+     reserved for things you can click; this column is inert. */
+  td.raw { color: var(--fg); overflow-wrap: anywhere; }
   td.meaning { overflow-wrap: anywhere; }
   /* "day-of-month" is allowed to break at its hyphens rather than widen the
      table past the viewport. */
   th:first-child, td:first-child { padding-right: .75rem; }
+
+  /* The day rule is the thing this page exists to get right, so it is set at
+     body size in body colour rather than as a footnote. */
+  .dayrule { font-size: 1rem; line-height: 1.55; margin: .75rem 0 0; }
+  .dayrule .or { color: var(--accent); font-weight: 600; }
 
   ol#runs { margin: .5rem 0; padding-left: 1.4rem; }
   ol#runs li { margin: .25rem 0; overflow-wrap: anywhere; }
   ol#runs li.empty { list-style: none; margin-left: -1.4rem; color: var(--muted); font-size: .9rem; }
   .stamp { font-size: .95rem; }
   .hint { color: var(--muted); font-size: .85rem; }
+  /* After the table and list colours, so greying a stale section beats them. */
+  .is-stale, .is-stale td, .is-stale th, .is-stale li, .is-stale span { color: var(--muted); }
 
   ul.examples { list-style: none; margin: .5rem 0; padding: 0; display: flex; flex-wrap: wrap; gap: .4rem; }
   button {
@@ -96,9 +119,9 @@
     font-size: .85rem;
     color: var(--accent);
     background: transparent;
-    border: 1px solid var(--rule);
+    border: 1px solid var(--edge);
     border-radius: 4px;
-    padding: .3rem .6rem;
+    padding: .35rem .6rem;
     cursor: pointer;
   }
   button:hover { border-color: var(--accent); }
@@ -107,31 +130,42 @@
 
   #copyfield { display: none; width: 100%; margin-top: .5rem; padding: .4rem;
                font-size: .85rem; color: var(--fg); background: transparent;
-               border: 1px solid var(--rule); border-radius: 4px; }
+               border: 1px solid var(--edge); border-radius: 4px; }
 
   footer { margin-top: 3rem; border-top: 1px solid var(--rule); padding-top: .75rem; }
   a { color: var(--accent); }
+
+  /* Phone widths: everything above the input is trimmed so the answer sits
+     next to the box with the keyboard open. */
+  @media (max-width: 480px) {
+    body { padding: 1rem 1rem 3rem; }
+    h1 { font-size: 1.25rem; margin-bottom: .1rem; }
+    .lede { font-size: .95rem; line-height: 1.5; margin-bottom: .35rem; }
+    label.field-label { margin-top: .85rem; }
+    .answer { min-height: 4.9rem; }
+    .sentence { font-size: 1.2rem; }
+    h2 { margin-top: 1.5rem; }
+  }
 </style>
 </head>
 <body>
 <main>
   <h1>cron-explain</h1>
-  <p class="lede">Paste a five-field cron expression. Get one sentence, a field breakdown, and the next five run times.</p>
+  <p class="lede">Paste a five-field cron expression: minute, hour, day-of-month, month, day-of-week.</p>
 
-  <label class="field-label" for="expr">Cron expression (minute hour day-of-month month day-of-week)</label>
+  <label class="field-label" for="expr">Cron expression</label>
   <input id="expr" type="text" spellcheck="false" autocapitalize="off" autocorrect="off"
-         autocomplete="off" aria-describedby="sentence" value="0 9 * * 1-5">
+         autocomplete="off" aria-describedby="sentence" value="0 9 * * 1-5"
+         placeholder="minute hour day-of-month month day-of-week">
 
-  <p class="sentence" id="sentence" aria-live="polite"></p>
-  <p class="muted" id="expanded"></p>
-  <p class="stale" id="stale"></p>
+  <div class="answer">
+    <p class="sentence" id="sentence" aria-live="polite"></p>
+    <p class="muted" id="expanded"></p>
+    <p class="stale" id="stale"></p>
+  </div>
 
-  <fieldset>
-    <legend>Timezone</legend>
-    <label><input type="radio" name="tz" value="local" checked> Local</label>
-    <label><input type="radio" name="tz" value="utc"> UTC</label>
-  </fieldset>
-  <p class="muted" id="zoneline"></p>
+  <h2>Examples</h2>
+  <ul class="examples" id="examples"></ul>
 
   <h2>Fields</h2>
   <table id="fields">
@@ -141,15 +175,18 @@
   <p class="dayrule" id="dayrule"></p>
 
   <h2>Next runs</h2>
+  <fieldset>
+    <legend>Timezone</legend>
+    <label><input type="radio" name="tz" value="local" checked> Local</label>
+    <label><input type="radio" name="tz" value="utc"> UTC</label>
+  </fieldset>
+  <p class="muted" id="zoneline"></p>
   <ol id="runs"></ol>
   <p class="note" id="dstnote">
     Daylight saving: a wall-clock minute a spring-forward skips is not listed. A minute a
     fall-back repeats is listed once. These are the times a wall clock shows, not a promise
     about any particular cron.
   </p>
-
-  <h2>Examples</h2>
-  <ul class="examples" id="examples"></ul>
 
   <h2>Share</h2>
   <p>
@@ -276,7 +313,7 @@
     dayRuleEl.classList.toggle('is-stale', on);
     runsEl.classList.toggle('is-stale', on);
     staleEl.textContent = on && lastGood
-      ? 'The breakdown and run times below still describe ' + lastGood + ', the last expression that parsed.'
+      ? 'Below: ' + lastGood + ', the last that parsed.'
       : '';
   }
 
@@ -299,6 +336,22 @@
     tr.appendChild(tdRaw);
     tr.appendChild(tdMeaning);
     rowsEl.appendChild(tr);
+  }
+
+  // The OR case is the rule cron explainers get wrong, so its "OR" is the one
+  // word on the page allowed to shout.
+  function setDayRule(text) {
+    clear(dayRuleEl);
+    var parts = text.split(/\bOR\b/);
+    for (var i = 0; i < parts.length; i++) {
+      if (i > 0) {
+        var em = document.createElement('span');
+        em.className = 'or';
+        em.textContent = 'OR';
+        dayRuleEl.appendChild(em);
+      }
+      dayRuleEl.appendChild(document.createTextNode(parts[i]));
+    }
   }
 
   function emptyRun(text) {
@@ -379,11 +432,11 @@
     clear(rowsEl);
     if (parsed.reboot) {
       addRow('alias', '@reboot', 'Not a clock schedule: runs once when the machine boots.');
-      dayRuleEl.textContent = '@reboot has no fields, so the day-of-month / day-of-week rule does not apply.';
+      setDayRule('@reboot has no fields, so the day-of-month / day-of-week rule does not apply.');
     } else {
       var rows = CE.fieldRows(parsed);
       for (var i = 0; i < rows.length; i++) addRow(rows[i].name, rows[i].raw, rows[i].meaning);
-      dayRuleEl.textContent = CE.dayRuleNote(parsed);
+      setDayRule(CE.dayRuleNote(parsed));
     }
 
     renderRuns(parsed, utc);
