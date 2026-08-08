@@ -49,6 +49,10 @@
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     font-size: 1rem;
     line-height: 1.65;
+    /* A cron field can be 60 characters of unbroken token, and it reaches the
+       page from a share link. Nothing on this page may set a width the phone
+       does not have, so any word longer than its line breaks instead. */
+    overflow-wrap: break-word;
   }
   main { max-width: 62ch; margin: 0 auto; }
   h1 { font-size: 1.5rem; line-height: 1.3; margin: 0 0 .25rem; letter-spacing: -0.01em; }
@@ -118,14 +122,22 @@
                    min-height: 34px; padding-right: .75rem; white-space: nowrap; }
   fieldset input[type="radio"] { width: 18px; height: 18px; margin: 0; }
 
-  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  /* Fixed layout is what keeps the page inside the viewport. Under automatic
+     layout the columns are sized from their content, so one long field —
+     twelve months, seven day names, a 60-character token — sets a table width
+     wider than the phone and the whole document scrolls sideways. With the
+     columns declared as fractions of the width the page already has, a long
+     field can only make its row taller. */
+  table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: .9rem; }
   th { text-align: left; font-weight: 600; font-size: .8rem; color: var(--muted);
        border-bottom: 1px solid var(--rule); padding: .35rem .5rem .35rem 0; }
   td { padding: .4rem .5rem .4rem 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
-  /* Long meanings are what force sideways scroll at 360px, so prose may break
-     anywhere. The raw column breaks only when a token genuinely does not fit,
-     or a 7-character "@reboot" comes apart as "@rebo / ot". The accent is
-     reserved for things you can click; this column is inert. */
+  th:nth-child(1) { width: 24%; }
+  th:nth-child(2) { width: 30%; }
+  /* The raw column breaks a token only when it genuinely does not fit its
+     column, so a 7-character "@reboot" stays whole and a 60-character one
+     wraps instead of widening the page. Prose may break anywhere. The accent
+     is reserved for things you can click; this column is inert. */
   td.raw { color: var(--fg); overflow-wrap: break-word; }
   td.meaning { overflow-wrap: anywhere; }
   /* "day-of-month" is allowed to break at its hyphens rather than widen the
