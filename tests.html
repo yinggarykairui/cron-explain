@@ -571,6 +571,16 @@
   rejects(undefined, 'no expression');
   rejects(42, 'no expression');
 
+  // What a share link looks like when its escapes did not come apart. The
+  // whole line arrives as one field, so the count alone sends the reader
+  // looking for four fields that are already on screen.
+  rejects('0%209%20%%20*%201-5', 'Found 1 field');
+  rejects('0%209%20%%20*%201-5', '"%"');
+  rejects('%', '"%"');
+  ok('a five-field expression with no "%" is not lectured about one',
+    CE.parse('0 9 * *').error.message.indexOf('%') < 0,
+    CE.parse('0 9 * *').error.message);
+
   ok('tabs separate fields', parseSafe('0\t9\t*\t*\t1-5').ok);
   ok('runs of spaces separate fields', parseSafe('0   9  *  *  1-5').ok);
   ok('leading and trailing whitespace is trimmed, not an error', parseSafe('   0 9 * * 1-5   ').ok);

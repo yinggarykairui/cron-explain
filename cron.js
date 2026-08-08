@@ -230,7 +230,16 @@
       if (parts.length === 6 || parts.length === 7) {
         return fail(null, 'Found ' + parts.length + ' fields; 5 are expected: minute hour day-of-month month day-of-week. No seconds field, no year field.');
       }
-      return fail(null, 'Found ' + parts.length + ' field' + (parts.length === 1 ? '' : 's') + '; 5 are expected (minute hour day-of-month month day-of-week).');
+      // A "%" means the text almost certainly arrived from a link whose
+      // escapes did not come apart, and the whole line then reads as one
+      // field. The count alone leaves the reader hunting for four fields that
+      // are there. The clause is kept to one short sentence because the
+      // message it joins already fills the height the page reserves for an
+      // error at 320px.
+      var percent = text.indexOf('%') >= 0
+        ? ' The "%" suggests a link that did not decode.'
+        : '';
+      return fail(null, 'Found ' + parts.length + ' field' + (parts.length === 1 ? '' : 's') + '; 5 are expected (minute hour day-of-month month day-of-week).' + percent);
     }
 
     var fields = [];

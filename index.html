@@ -304,6 +304,11 @@
   // Length of an over-long hash, kept so the message can name what was actually
   // supplied rather than the length it was capped to.
   var hashOverLength = 0;
+  // True while the box still holds a hash that would not decode. The text in
+  // the address bar is then the only copy of what the sender meant, so it is
+  // left alone: re-encoding it turns "%" into "%25" and rewrites the link the
+  // page is in the middle of rejecting.
+  var hashUndecoded = false;
 
   function isUtc() {
     var utc = document.querySelector('input[name="tz"][value="utc"]');
@@ -335,21 +340,21 @@
   // A bare "%" in the hash makes decodeURIComponent throw URIError. Uncaught,
   // at top level, that ships a blank page — so the raw text is used instead
   // and the parser turns it into an ordinary error message.
-  // Returns {text, length}. `length` is the hash as supplied, even when only
-  // the first HASH_LIMIT characters were decoded.
+  // Returns {text, length, decoded}. `length` is the hash as supplied, even
+  // when only the first HASH_LIMIT characters were decoded; `decoded` is false
+  // when the escapes did not come apart, which is what keeps the address bar
+  // from being rewritten with the raw text re-escaped.
   function readHash() {
     var raw = String(location.hash || '').replace(/^#/, '');
     var length = raw.length;
     // "+" means a space here, the way it does in a query string, so a
     // hand-written #0+9+*+*+1-5 is five fields and not one.
     var encoded = (length > HASH_LIMIT ? raw.slice(0, HASH_LIMIT) : raw).replace(/\+/g, ' ');
-    var text;
     try {
-      text = decodeURIComponent(encoded);
+      return { text: decodeURIComponent(encoded), length: length, decoded: true };
     } catch (e) {
-      text = encoded;
+      return { text: encoded, length: length, decoded: false };
     }
-    return { text: text, length: length };
   }
 
   function writeHash(expression) {
@@ -559,7 +564,7 @@
       return;
     }
 
-    writeHash(text.replace(/^\s+|\s+$/g, ''));
+    if (!hashUndecoded) writeHash(text.replace(/^\s+|\s+$/g, ''));
 
     var parsed = CE.parse(text);
     if (!parsed.ok) {
@@ -612,6 +617,7 @@
       button.addEventListener('click', function () {
         input.value = expression;
         hashOverLength = 0;
+        hashUndecoded = false;
         resetCopy();
         render();
       });
@@ -622,6 +628,7 @@
 
   input.addEventListener('input', function () {
     hashOverLength = 0;
+    hashUndecoded = false;
     resetCopy();
     render();
   });
@@ -643,6 +650,7 @@
   window.addEventListener('hashchange', function () {
     var got = readHash();
     hashOverLength = got.length > HASH_LIMIT ? got.length : 0;
+    hashUndecoded = !got.decoded;
     // An emptied hash means no expression. It must not fall back to the
     // default: that swaps the expression on screen for one nobody asked for
     // and then writes the default's own hash into the URL just cleared.
@@ -679,6 +687,7 @@
 
   var initial = readHash();
   hashOverLength = initial.length > HASH_LIMIT ? initial.length : 0;
+  hashUndecoded = !initial.decoded;
   input.value = hashOverLength ? '' : (initial.text || DEFAULT_EXPRESSION);
   render();
   input.focus();
