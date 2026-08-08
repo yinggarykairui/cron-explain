@@ -44,6 +44,10 @@
   .lede { color: var(--muted); margin-top: 0; }
   .muted { color: var(--muted); font-size: .9rem; }
   .note { color: var(--muted); font-size: .85rem; line-height: 1.55; }
+  /* A rejected expression leaves the breakdown and the run list in place so the
+     page does not lurch, but greyed and labelled: they are last-known-good. */
+  .stale { color: var(--muted); font-size: .9rem; margin: .25rem 0 0; }
+  .is-stale, .is-stale * { color: var(--muted); }
   code, .mono, input#expr, .stamp, td.raw, .example {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
@@ -120,6 +124,7 @@
 
   <p class="sentence" id="sentence" aria-live="polite"></p>
   <p class="muted" id="expanded"></p>
+  <p class="stale" id="stale"></p>
 
   <fieldset>
     <legend>Timezone</legend>
@@ -129,18 +134,18 @@
   <p class="muted" id="zoneline"></p>
 
   <h2>Fields</h2>
-  <table>
+  <table id="fields">
     <thead><tr><th scope="col">Field</th><th scope="col">Text</th><th scope="col">Meaning</th></tr></thead>
     <tbody id="fieldrows"></tbody>
   </table>
-  <p class="note" id="dayrule"></p>
+  <p class="dayrule" id="dayrule"></p>
 
-  <h2>Next five runs</h2>
+  <h2>Next runs</h2>
   <ol id="runs"></ol>
-  <p class="note">
-    Daylight saving: a wall-clock minute that a spring-forward skips is not listed, and a minute
-    that a fall-back repeats is listed once. These are the times a wall clock shows, not a promise
-    about how any particular cron implementation behaves.
+  <p class="note" id="dstnote">
+    Daylight saving: a wall-clock minute a spring-forward skips is not listed. A minute a
+    fall-back repeats is listed once. These are the times a wall clock shows, not a promise
+    about any particular cron.
   </p>
 
   <h2>Examples</h2>
@@ -170,8 +175,8 @@
   var CE = window.CronExplain;
   var DEFAULT_EXPRESSION = '0 9 * * 1-5';
   var EXAMPLES = ['*/15 * * * *', '0 9 * * 1-5', '0 0 1 * *', '30 3 * * SUN', '0 */6 * * *', '@daily'];
-  // A hash can be arbitrarily long; slice before it reaches the parser so a
-  // hostile URL costs nothing. The parser reports anything over its own limit.
+  // A hash can be arbitrarily long; nothing longer than this is decoded, and
+  // nothing longer than this is ever written, so a link always round-trips.
   var HASH_LIMIT = 4096;
 
   var input = document.getElementById('expr');
@@ -179,12 +184,22 @@
   var expandedEl = document.getElementById('expanded');
   var zoneEl = document.getElementById('zoneline');
   var rowsEl = document.getElementById('fieldrows');
+  var tableEl = document.getElementById('fields');
   var dayRuleEl = document.getElementById('dayrule');
+  var staleEl = document.getElementById('stale');
   var runsEl = document.getElementById('runs');
+  var dstNoteEl = document.getElementById('dstnote');
   var examplesEl = document.getElementById('examples');
   var copyBtn = document.getElementById('copy');
   var copyStatus = document.getElementById('copystatus');
   var copyField = document.getElementById('copyfield');
+
+  // The last expression that parsed, so an error can say what the rows and the
+  // run list below it are still describing.
+  var lastGood = null;
+  // Length of an over-long hash, kept so the message can name what was actually
+  // supplied rather than the length it was capped to.
+  var hashOverLength = 0;
 
   function isUtc() {
     var utc = document.querySelector('input[name="tz"][value="utc"]');
@@ -216,27 +231,53 @@
   // A bare "%" in the hash makes decodeURIComponent throw URIError. Uncaught,
   // at top level, that ships a blank page — so the raw text is used instead
   // and the parser turns it into an ordinary error message.
+  // Returns {text, length}. `length` is the hash as supplied, even when only
+  // the first HASH_LIMIT characters were decoded.
   function readHash() {
     var raw = String(location.hash || '').replace(/^#/, '');
-    if (raw === '') return '';
-    if (raw.length > HASH_LIMIT) raw = raw.slice(0, HASH_LIMIT);
+    var length = raw.length;
+    // "+" means a space here, the way it does in a query string, so a
+    // hand-written #0+9+*+*+1-5 is five fields and not one.
+    var encoded = (length > HASH_LIMIT ? raw.slice(0, HASH_LIMIT) : raw).replace(/\+/g, ' ');
+    var text;
     try {
-      return decodeURIComponent(raw);
+      text = decodeURIComponent(encoded);
     } catch (e) {
-      return raw;
+      text = encoded;
     }
+    return { text: text, length: length };
   }
 
   function writeHash(expression) {
+    var encoded = expression ? encodeURIComponent(expression) : '';
+    // Never write more than readHash will read back: a hash that gets truncated
+    // on the way in is a link to a different expression.
+    var url = encoded && encoded.length <= HASH_LIMIT
+      ? '#' + encoded
+      : location.pathname + location.search;
     try {
-      var url = expression
-        ? '#' + encodeURIComponent(expression)
-        : location.pathname + location.search;
       history.replaceState(null, '', url);
     } catch (e) {
       // Some file:// contexts refuse replaceState. Sharing degrades; the page
       // keeps working.
     }
+  }
+
+  // The fallback URL box belongs to one expression. When the expression moves,
+  // the box goes with it rather than sitting there offering the old link.
+  function resetCopy() {
+    copyStatus.textContent = '';
+    copyField.style.display = 'none';
+    copyField.value = '';
+  }
+
+  function setStale(on) {
+    tableEl.classList.toggle('is-stale', on);
+    dayRuleEl.classList.toggle('is-stale', on);
+    runsEl.classList.toggle('is-stale', on);
+    staleEl.textContent = on && lastGood
+      ? 'The breakdown and run times below still describe ' + lastGood + ', the last expression that parsed.'
+      : '';
   }
 
   function clear(node) {
@@ -271,6 +312,9 @@
     clear(runsEl);
     var now = new Date();
     var result = CE.nextRuns(parsed, { from: now, count: 5, utc: utc });
+    // The daylight-saving footnote governs local wall-clock times. It says
+    // nothing about UTC, about @reboot or about a schedule that never runs.
+    dstNoteEl.hidden = utc || result.reboot || result.runs.length === 0;
     if (result.reboot) {
       emptyRun('No run times: @reboot fires when the machine boots, not on a clock.');
       return;
@@ -288,12 +332,22 @@
       li.appendChild(hint);
       runsEl.appendChild(li);
     }
+    // A five-field expression either fills the list or has no run at all: the
+    // sparsest legal one, "0 0 29 2 *", still lands a dozen times in 50 years.
+    // So there is no "only N runs" case to report.
     if (!result.complete) {
-      emptyRun(result.runs.length === 0
-        ? 'No run in the next ' + result.horizonYears + ' years.'
-        : 'Only ' + result.runs.length + ' run' + (result.runs.length === 1 ? '' : 's') +
-          ' in the next ' + result.horizonYears + ' years.');
+      emptyRun('No run in the next ' + result.horizonYears + ' years.');
     }
+  }
+
+  // An error keeps the breakdown and the run list on screen, greyed and
+  // labelled, so nothing moves and nothing claims to describe the typing.
+  function showError(message) {
+    sentenceEl.className = 'sentence is-error';
+    sentenceEl.textContent = message;
+    expandedEl.textContent = '';
+    dstNoteEl.hidden = true;
+    setStale(true);
   }
 
   function renderOnce() {
@@ -302,17 +356,20 @@
     zoneEl.textContent = zoneText(utc);
     writeHash(text.replace(/^\s+|\s+$/g, ''));
 
-    var parsed = CE.parse(text);
-    if (!parsed.ok) {
-      // Error state: the sentence carries the message, the run list empties,
-      // the rest of the page stays exactly where it was.
-      sentenceEl.className = 'sentence is-error';
-      sentenceEl.textContent = parsed.error.message;
-      expandedEl.textContent = '';
-      clear(runsEl);
+    if (hashOverLength) {
+      showError('That link carries ' + hashOverLength + ' characters. A cron line is at most ' +
+        CE.MAX_LENGTH + ', so it was not read.');
       return;
     }
 
+    var parsed = CE.parse(text);
+    if (!parsed.ok) {
+      showError(parsed.error.message);
+      return;
+    }
+
+    lastGood = parsed.expression;
+    setStale(false);
     sentenceEl.className = 'sentence';
     sentenceEl.textContent = CE.describe(parsed);
     expandedEl.textContent = parsed.alias && parsed.expanded
@@ -354,7 +411,8 @@
       button.textContent = expression;
       button.addEventListener('click', function () {
         input.value = expression;
-        copyStatus.textContent = '';
+        hashOverLength = 0;
+        resetCopy();
         render();
         input.focus();
       });
@@ -364,7 +422,8 @@
   }
 
   input.addEventListener('input', function () {
-    copyStatus.textContent = '';
+    hashOverLength = 0;
+    resetCopy();
     render();
   });
 
@@ -374,9 +433,14 @@
   }
 
   window.addEventListener('hashchange', function () {
-    var fromHash = readHash();
-    if (fromHash && fromHash !== input.value) {
-      input.value = fromHash;
+    var got = readHash();
+    hashOverLength = got.length > HASH_LIMIT ? got.length : 0;
+    // An emptied hash means no expression, which is the default — not "keep
+    // showing whatever was there before the URL changed".
+    var next = hashOverLength ? '' : (got.text || DEFAULT_EXPRESSION);
+    if (next !== input.value || hashOverLength) {
+      input.value = next;
+      resetCopy();
       render();
     }
   });
@@ -405,7 +469,8 @@
   });
 
   var initial = readHash();
-  input.value = initial || DEFAULT_EXPRESSION;
+  hashOverLength = initial.length > HASH_LIMIT ? initial.length : 0;
+  input.value = hashOverLength ? '' : (initial.text || DEFAULT_EXPRESSION);
   render();
   input.focus();
 }());
