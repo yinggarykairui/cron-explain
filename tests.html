@@ -609,6 +609,46 @@
   eq('"30 3 * * SUN" sentence', CE.describe(parseSafe('30 3 * * SUN')), 'At 03:30, on Sunday.');
   eq('"0 0 1 * *" sentence', CE.describe(parseSafe('0 0 1 * *')), 'At 00:00, on day 1 of the month.');
   eq('"@daily" sentence', CE.describe(parseSafe('@daily')), 'At 00:00.');
+
+  // Under the OR rule a day field that leaves nothing out makes the union
+  // every day, so neither day clause restricts anything and both go. Without
+  // this, "0 0 15 3 0-6" read "on day 15 of the month or on every day of the
+  // week" over a run list of consecutive days.
+  eq('"0 0 15 3 0-6" does not offer day 15 and every day as alternatives',
+    CE.describe(parseSafe('0 0 15 3 0-6')), 'At 00:00, in March.');
+  eq('the runs under that sentence are consecutive days in March',
+    stampsUtc('0 0 15 3 0-6', '2026-08-08T12:00:00Z', 3),
+    ['Mon 2027-03-01 00:00 UTC', 'Tue 2027-03-02 00:00 UTC', 'Wed 2027-03-03 00:00 UTC']);
+  eq('"0 0 1-31 3 5" is the same shape from the day-of-month side',
+    CE.describe(parseSafe('0 0 1-31 3 5')), 'At 00:00, in March.');
+  eq('"0 0 15 * 0-6" is every day, not day 15',
+    CE.describe(parseSafe('0 0 15 * 0-6')), 'At 00:00.');
+  eq('and its runs are consecutive days',
+    stampsUtc('0 0 15 * 0-6', '2026-08-08T12:00:00Z', 3),
+    ['Sun 2026-08-09 00:00 UTC', 'Mon 2026-08-10 00:00 UTC', 'Tue 2026-08-11 00:00 UTC']);
+  eq('"0 0 * * 0-6" drops the clause instead of saying "every day of the week"',
+    CE.describe(parseSafe('0 0 * * 0-6')), 'At 00:00.');
+  eq('"5 4 * * SUN-SAT" drops it by name too',
+    CE.describe(parseSafe('5 4 * * SUN-SAT')), 'At 04:05.');
+  eq('"0 0 1-31 * *" drops a day-of-month range that leaves nothing out',
+    CE.describe(parseSafe('0 0 1-31 * *')), 'At 00:00.');
+  eq('"0 0 */2 * 0-6" keeps the restriction that is real and drops the one that is not',
+    CE.describe(parseSafe('0 0 */2 * 0-6')), 'At 00:00, on every 2nd day of the month.');
+  (function () {
+    var cancels = [];
+    var expressions = ['0 0 15 3 0-6', '0 0 15 * 0-6', '0 0 * * 0-6', '0 0 * * 0-7',
+      '5 4 * * SUN-SAT', '0 0 1-31 3 5', '0 0 1-31 * 5', '0 0 1-31 * *',
+      '0 0 15 3 0,1,2,3,4,5,6'];
+    for (var i = 0; i < expressions.length; i++) {
+      var text = CE.describe(parseSafe(expressions[i]));
+      if (/every day of the week|days 1 through 31/i.test(text)) {
+        cancels.push(expressions[i] + ': ' + text);
+      }
+    }
+    ok('no sentence names a day field that leaves nothing out',
+      cancels.length === 0, cancels.join(' | '));
+  }());
+
   eq('field rows count', CE.fieldRows(parseSafe('0 9 * * 1-5')).length, 5);
   eq('field row names', CE.fieldRows(parseSafe('0 9 * * 1-5')).map(function (r) { return r.name; }),
     ['minute', 'hour', 'day-of-month', 'month', 'day-of-week']);
@@ -654,6 +694,35 @@
     CE.describe(parseSafe('*/20 * * * *')), 'Every 20 minutes.');
   eq('"*/45" with one hour reads as clock times',
     CE.describe(parseSafe('*/45 9 * * *')), 'At 09:00 and 09:45.');
+
+  // The gap claim also has to survive the hours the sentence scopes it to.
+  // "*/30 1,13 * * *" is thirty minutes and then eleven and a half hours, and
+  // both gaps fall inside "hours 1 and 13".
+  eq('"*/30 1,13" names its times instead of claiming a 30-minute gap',
+    CE.describe(parseSafe('*/30 1,13 * * *')), 'At 01:00, 01:30, 13:00 and 13:30.');
+  eq('the runs under that sentence are 30 minutes and then 11.5 hours apart',
+    stampsUtc('*/30 1,13 * * *', '2026-08-08T12:00:00Z', 4),
+    ['Sat 2026-08-08 13:00 UTC', 'Sat 2026-08-08 13:30 UTC',
+      'Sun 2026-08-09 01:00 UTC', 'Sun 2026-08-09 01:30 UTC']);
+  eq('"*/20 0,12" names its times too', CE.describe(parseSafe('*/20 0,12 * * *')),
+    'At 00:00, 00:20, 00:40, 12:00, 12:20 and 12:40.');
+  eq('a gappy hour set with too many times falls back to minutes of hours',
+    CE.describe(parseSafe('*/10 0,6,12,18 * * *')),
+    'At minutes 0, 10, 20, 30, 40 and 50 of hours 0, 6, 12 and 18.');
+  eq('an unbroken hour range keeps the gap phrase',
+    CE.describe(parseSafe('*/30 1-5 * * *')), 'Every 30 minutes of hours 1 through 5.');
+  eq('a single hour keeps it as well',
+    CE.describe(parseSafe('*/30 3 * * *')), 'Every 30 minutes of hour 3.');
+  (function () {
+    var wrong = [];
+    var hours = ['1,13', '0,12', '0,6,12,18', '1,2,4', '9-12,17', '0,23'];
+    for (var i = 0; i < hours.length; i++) {
+      var text = CE.describe(parseSafe('*/30 ' + hours[i] + ' * * *'));
+      if (/Every \d+ minutes/.test(text)) wrong.push(hours[i] + ': ' + text);
+    }
+    ok('no "Every N minutes" headline over an hour set with a gap in it',
+      wrong.length === 0, wrong.join(' | '));
+  }());
   (function () {
     var wrong = [];
     for (var s = 2; s <= 59; s++) {

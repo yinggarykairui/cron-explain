@@ -322,6 +322,13 @@
     return (minute.values.length === 1 ? 'minute ' : 'minutes ') + compactList(minute.values, numberName);
   }
 
+  // Values arrive sorted and de-duplicated, so one run of consecutive numbers
+  // is exactly a set whose span equals its size.
+  function isUnbroken(values) {
+    return values.length > 0 &&
+      values[values.length - 1] - values[0] + 1 === values.length;
+  }
+
   function timePhrase(minute, hour) {
     var everyMinute = minute.values.length === 60;
     var everyHour = hour.values.length === 24;
@@ -331,8 +338,14 @@
     // "Every N minutes" is a claim about the gaps, so it is only true when N
     // divides the hour. "*/45" fires at :00 and :45 — a 45-minute gap, then a
     // 15-minute one — so it falls through and is named by its minutes instead.
+    //
+    // The claim also has to survive the hours it is scoped to. "*/30 1,13 * * *"
+    // runs 01:00, 01:30, 13:00, 13:30: thirty minutes, then eleven and a half
+    // hours, both inside "hours 1 and 13". A gappy hour set is named by its
+    // times instead; an unbroken one keeps the phrase, because the gap then
+    // falls outside the hours the sentence names.
     var step = starStep(minute.raw);
-    if (step && 60 % step === 0) {
+    if (step && 60 % step === 0 && isUnbroken(hour.values)) {
       var head = 'Every ' + (step === 1 ? 'minute' : step + ' minutes');
       return everyHour ? head : head + ' of ' + hoursNoun(hour);
     }
@@ -360,8 +373,16 @@
     return field.raw === '*' || starStep(field.raw) === 1;
   }
 
+  // A field that holds every value it can hold restricts nothing, however it
+  // was written. "1-31" and "0-6" are day fields with no days left out, so a
+  // clause naming them describes a restriction the run list does not have.
+  // The count covers "*" and "*/1" as well: both fill the field.
+  function selectsEveryDay(field) {
+    return field.key === 'dom' ? field.values.length === 31 : field.values.length === 7;
+  }
+
   function domPhrase(dom) {
-    if (isEveryValue(dom)) return '';
+    if (selectsEveryDay(dom)) return '';
     var step = starStep(dom.raw);
     if (step) return 'on every ' + ordinal(step) + ' day of the month';
     return 'on ' + (dom.values.length === 1 ? 'day ' : 'days ') +
@@ -369,8 +390,7 @@
   }
 
   function dowPhrase(dow) {
-    if (isEveryValue(dow)) return '';
-    if (dow.values.length === 7) return 'on every day of the week';
+    if (selectsEveryDay(dow)) return '';
     var text = compactList(dow.values, dayName);
     // A run reads as "Monday through Friday"; anything else takes "on".
     return text.indexOf(' through ') >= 0 ? text : 'on ' + text;
@@ -383,9 +403,18 @@
     return 'in ' + compactList(month.values, monthName);
   }
 
+  // On the OR branch, one day field that leaves nothing out makes the union
+  // every day, so the other field's clause is not a restriction either.
+  // "0 0 15 3 0-6" runs every day in March; "on day 15 of the month or on
+  // every day of the week" cancels itself out and contradicts the run list.
+  function orTakesEveryDay(dom, dow) {
+    return !dom.star && !dow.star && (selectsEveryDay(dom) || selectsEveryDay(dow));
+  }
+
   // Vixie's rule, in words. "or" is only correct when neither raw day field
   // starts with a star; otherwise the two fields are ANDed.
   function dayPhrase(dom, dow) {
+    if (orTakesEveryDay(dom, dow)) return '';
     var d = domPhrase(dom);
     var w = dowPhrase(dow);
     if (!d && !w) return '';
@@ -438,7 +467,7 @@
     // month leads instead and scopes both. The comma after the time phrase is
     // load-bearing: without it "every minute of hours 9 through 17 on day 15"
     // binds as one clause and "or on Friday" is left dangling.
-    if (month && !dom.star && !dow.star) {
+    if (month && !dom.star && !dow.star && !orTakesEveryDay(dom, dow)) {
       var d = domPhrase(dom);
       var w = dowPhrase(dow);
       if (d && w) {
@@ -595,8 +624,17 @@
             var at = utc ? new Date(Date.UTC(cy, cm - 1, cd, h, m, 0, 0))
               : new Date(cy, cm - 1, cd, h, m, 0, 0);
             if (!utc) {
-              // A wall-clock minute that does not read back is one the spring
-              // forward skipped; it never happens, so it is not listed.
+              // A wall-clock time that does not read back as the time it was
+              // built from does not exist in this zone, so it is not listed.
+              // Both halves of the comparison are live. The hour and minute
+              // are what a daylight-saving jump moves: 02:30 on a spring
+              // forward reads back as 03:30, and a half-hour jump (Lord Howe)
+              // moves the minute alone. The date is compared because a zone
+              // can drop a whole calendar day instead — Pacific/Apia had no
+              // 2011-12-30, and 09:00 that day reads back as 09:00 on the
+              // 31st. tests.html covers the daylight-saving half in any host
+              // zone that has a transition; the dropped day is not reachable
+              // from a host zone, so nothing asserts it.
               if (at.getFullYear() !== cy || at.getMonth() !== cm - 1 || at.getDate() !== cd ||
                 at.getHours() !== h || at.getMinutes() !== m) continue;
             }
