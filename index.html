@@ -58,10 +58,14 @@
   }
   main { max-width: 62ch; margin: 0 auto; }
   /* The title is a label on a page you are already looking at; the sentence is
-     what you came for. So the title is set below body-plus, not above it, and
-     the answer is the largest thing on screen. See .sentence. */
-  h1 { font-size: 1.25rem; line-height: 1.3; margin: 0 0 .25rem; letter-spacing: -0.01em; }
-  h2 { font-size: .95rem; text-transform: lowercase; letter-spacing: .04em; color: var(--muted);
+     what you came for, so the answer stays the largest thing on screen. But the
+     ladder below it has to stay legible as a ladder: answer > h1 > h2 > body at
+     every breakpoint. Trimming h1 to 1.25rem/1.05rem put it within 0.8px of the
+     body text on a phone, which is no rank at all. These four steps are ordered
+     and measured: 25.6 / 21.6 / 16.8 / 16 wide, 21.6 / 19.2 / 16.8 / 16 at
+     <=480. See .sentence for the top of the ladder. */
+  h1 { font-size: 1.35rem; line-height: 1.3; margin: 0 0 .25rem; letter-spacing: -0.01em; }
+  h2 { font-size: 1.05rem; text-transform: lowercase; letter-spacing: .04em; color: var(--muted);
        margin: 2rem 0 .5rem; font-weight: 600; }
   /* The answer's reserve already ends in space; another 2rem on top of that is
      what made the resting state read as a gap nothing had filled. */
@@ -119,7 +123,7 @@
      y in every state. Two earlier attempts at this moved that line instead of
      pinning it. */
   .answer {
-    min-height: 6rem;      /* measured: tallest error at >=768px is 95.6px */
+    min-height: 6rem;      /* reserve holds; tallest error at >=768px now 80.0px */
     margin: 1rem 0 0;
   }
   /* The accent rule sits on the paragraphs, not on the block, so it stops
@@ -131,9 +135,25 @@
   .answer p { margin: 0; padding-left: .9rem; border-left: 3px solid var(--accent); }
   /* An empty paragraph must not reserve its margins on top of the block's. */
   .answer p:empty { display: none; }
+  /* One state, one colour. The run list ~700px below turns --error for the same
+     "not current" fact, so a blue rule down a red message read as two unrelated
+     conditions. The rule is on the paragraphs, so the whole block is recoloured
+     together rather than the message alone. */
+  .answer.is-error p { border-left-color: var(--error); }
   #expanded, #stale { padding-top: .35rem; }
   .sentence { font-size: 1.6rem; font-weight: 500; line-height: 1.4; margin: 0; }
-  .sentence.is-error { color: var(--error); font-size: .95rem; font-weight: 400; line-height: 1.45; }
+  /* The message replaces the answer, so it is set as an answer and not as a
+     caption: .95rem put it below the 16px body text, 6.4px under the sentence it
+     stands in for. The size is capped by the reserve, not by taste — the tallest
+     error has to stay inside a min-height that is not moving. Measured tallest
+     at this size: 80.0px of 96 wide, 107.0px of 138.4 at 481-767, and 137.1px of
+     160.8 at 320 with the 1.05rem step below. */
+  .sentence.is-error, .sentence.is-empty { font-size: 1.25rem; font-weight: 400; line-height: 1.35; }
+  .sentence.is-error { color: var(--error); }
+  /* Emptying the field is the first thing anyone does before typing their own
+     expression. It is a resting state, not a rejection: muted, no flags, no red
+     rule. Only a malformed expression gets the error treatment. */
+  .sentence.is-empty { color: var(--muted); }
 
   fieldset { border: 0; padding: 0; margin: .5rem 0 0; }
   legend { padding: 0; font-size: .85rem; color: var(--muted); }
@@ -179,11 +199,19 @@
      the list sideways while you typed. */
   ol#runs { margin: .5rem 0; padding-left: 1.4rem; border-left: 3px solid transparent; }
   ol#runs li { margin: .25rem 0; overflow-wrap: break-word; }
-  ol#runs li.empty { list-style: none; margin-left: -1.4rem; color: var(--muted); font-size: .9rem; }
+  /* The negative margin has to cancel the border as well as the padding, or the
+     one line with no marker — "@reboot fires when the machine boots", "no run in
+     the next N years" — starts 3px right of every heading and paragraph on the
+     page. The border itself stays permanently drawn; see above. */
+  ol#runs li.empty { list-style: none; margin-left: calc(-1.4rem - 3px); color: var(--muted); font-size: .9rem; }
   /* The next run is the one anybody is here for; the other four are context.
-     Weight on the stamp only — the hint is muted and bold muted reads broken. */
+     Weight on the stamp only — the hint is muted and bold muted reads broken.
+     The marker carries the accent and not the weight: a bold "1." is a wider
+     marker, and because markers are right-aligned to the text it grew leftwards
+     into the rule, so the first item cleared it by 2px where the rest cleared it
+     by 8. Colour ranks it without moving it. */
   ol#runs li:first-child:not(.empty) .stamp { font-weight: 600; }
-  ol#runs li:first-child:not(.empty)::marker { color: var(--accent); font-weight: 700; }
+  ol#runs li:first-child:not(.empty)::marker { color: var(--accent); }
   .stamp { font-size: .95rem; }
   /* The hint wraps as one piece or not at all: "in 36 / hours" split across
      two lines on the first item while the others stayed whole. */
@@ -194,8 +222,11 @@
      looks. The run list sits ~700px below the notice in the answer, so it
      carries its own: a rule down its side, and a flag on the heading right
      above it. Both frozen regions get the flag; neither is hidden, because
-     showing the last answer that parsed is the point. */
-  ol#runs.is-stale { border-left-color: var(--error); }
+     showing the last answer that parsed is the point.
+     The alarm is reserved for a rejected expression. An empty box freezes the
+     same content, but quietly: greyed and labelled in the answer, with no rule
+     and no flag. Select-all-delete is not a mistake to be shouted at. */
+  ol#runs.is-stale-error { border-left-color: var(--error); }
   ol#runs.is-stale li:first-child:not(.empty)::marker { color: var(--muted); }
   h2 .flag { color: var(--error); font-weight: 600; }
 
@@ -230,18 +261,23 @@
   /* The same message is one line at 1280px and four at 360px, so the reserve
      is measured per bucket. */
   @media (max-width: 767px) {
-    .answer { min-height: 8.65rem; }   /* tallest error at 481-767px: 138.1px */
+    .answer { min-height: 8.65rem; }   /* tallest error at 481-767px: 107.0px */
   }
 
   /* Phone widths: everything above the input is trimmed so the answer sits
      next to the box with the keyboard open. */
   @media (max-width: 480px) {
     body { padding: 1rem 1rem 3rem; }
-    h1 { font-size: 1.05rem; margin-bottom: .1rem; }
+    h1 { font-size: 1.2rem; margin-bottom: .1rem; }
     .lede { font-size: .95rem; line-height: 1.5; margin-bottom: .35rem; }
     label.field-label { margin-top: .85rem; }
-    .answer { min-height: 10.05rem; }   /* 160.1px at 360 */
+    .answer { min-height: 10.05rem; }   /* tallest error at 320: 137.1px */
     .sentence { font-size: 1.35rem; }
+    /* 320px is where the reserve binds: the tallest error is 137.1px of 160.8
+       here, and one step up (1.1rem) puts it at 160.7px, which is the reserve to
+       0.1px. So the message steps down with the sentence and stays above the
+       16px body text rather than below it. */
+    .sentence.is-error, .sentence.is-empty { font-size: 1.05rem; }
     /* A stamp plus a hint is one line too wide here, and which items wrapped
        depended on how long the hint happened to be — so the first UTC item
        broke and the rest did not, and switching zone moved the page. The hint
@@ -429,16 +465,25 @@
   // The full sentence is up in the answer, ~700px above the run list on a
   // phone. The flags are the same fact where the frozen content actually is,
   // short enough that raising one cannot rewrap its heading.
-  function setStale(on) {
-    var frozen = !!(on && lastGood);
-    tableEl.classList.toggle('is-stale', on);
-    dayRuleEl.classList.toggle('is-stale', on);
-    runsEl.classList.toggle('is-stale', on);
-    staleEl.textContent = frozen
-      ? 'Still showing the last expression that parsed: ' + lastGood.expression + '.'
-      : '';
-    runsFlag.textContent = frozen ? '(not current)' : '';
-    fieldsFlag.textContent = frozen ? '(not current)' : '';
+  //
+  // Two frozen states, one mechanism. 'error' is a rejected expression: the
+  // alarm belongs there, so both headings get a flag and the run list gets its
+  // rule. 'quiet' is an empty box, which is what select-all-delete produces
+  // before anyone types anything — the same content is frozen and labelled, but
+  // in grey, with nothing red anywhere on the page. '' is live.
+  function setStale(mode) {
+    var frozen = !!(mode && lastGood);
+    var alarm = frozen && mode === 'error';
+    tableEl.classList.toggle('is-stale', frozen);
+    dayRuleEl.classList.toggle('is-stale', frozen);
+    runsEl.classList.toggle('is-stale', frozen);
+    runsEl.classList.toggle('is-stale-error', alarm);
+    staleEl.textContent = !frozen ? ''
+      : alarm
+        ? 'Still showing the last expression that parsed: ' + lastGood.expression + '.'
+        : 'Fields and next runs below still show ' + lastGood.expression + '.';
+    runsFlag.textContent = alarm ? '(not current)' : '';
+    fieldsFlag.textContent = alarm ? '(not current)' : '';
   }
 
   function clear(node) {
@@ -547,6 +592,9 @@
   function goodAnswerHeight() {
     if (!lastGood) return 0;
     var ghost = answerEl.cloneNode(true);
+    // The copy stands in for a valid answer, so it carries none of the state
+    // the live block is in while it is being measured.
+    ghost.classList.remove('is-error');
     var ids = ghost.querySelectorAll('[id]');
     for (var i = 0; i < ids.length; i++) {
       ids[i].removeAttribute('id');
@@ -582,6 +630,7 @@
   // times in New York wall clock is the lie the greying exists to prevent.
   function showError(message) {
     sentenceEl.className = 'sentence is-error';
+    answerEl.classList.add('is-error');
     sentenceEl.textContent = message;
     // The live region says it once, to whoever was listening at the time. The
     // attribute says it for as long as it is true, to anyone who arrives at
@@ -590,18 +639,43 @@
     expandedEl.textContent = '';
     pinAnswer();
     if (lastGood) {
-      setStale(true);
+      setStale('error');
       renderRuns(lastGood, isUtc());
       return;
     }
     // Nothing has parsed yet — a cold load with a bad hash. There is nothing to
     // freeze, so both the table and the list say so instead of standing empty.
-    setStale(false);
+    setStale('');
     clear(rowsEl);
     emptyRow('No fields to break down: the expression above did not parse.');
     setDayRule('The day-of-month / day-of-week rule needs an expression that parses.');
     clear(runsEl);
     emptyRun('No run times: the expression above did not parse.');
+  }
+
+  // An empty box is not a rejected expression. The parser returns the same shape
+  // for both, so the empty case is caught before the message is read: nothing is
+  // invalid, nothing is red, and the block keeps the height the last answer gave
+  // it so deleting the line does not pull the page up. The breakdown below stays
+  // frozen and greyed, with one muted line saying what it belongs to.
+  function showEmpty() {
+    sentenceEl.className = 'sentence is-empty';
+    answerEl.classList.remove('is-error');
+    sentenceEl.textContent = 'Type five fields: minute hour day-of-month month day-of-week.';
+    input.removeAttribute('aria-invalid');
+    expandedEl.textContent = '';
+    pinAnswer();
+    if (lastGood) {
+      setStale('quiet');
+      renderRuns(lastGood, isUtc());
+      return;
+    }
+    setStale('');
+    clear(rowsEl);
+    emptyRow('No fields to break down yet: the box above is empty.');
+    setDayRule('The day-of-month / day-of-week rule needs an expression.');
+    clear(runsEl);
+    emptyRun('No run times yet: the box above is empty.');
   }
 
   function renderOnce() {
@@ -620,7 +694,13 @@
       return;
     }
 
-    if (!hashUndecoded) writeHash(text.replace(/^\s+|\s+$/g, ''));
+    var trimmed = text.replace(/^\s+|\s+$/g, '');
+    if (!hashUndecoded) writeHash(trimmed);
+
+    if (trimmed === '') {
+      showEmpty();
+      return;
+    }
 
     var parsed = CE.parse(text);
     if (!parsed.ok) {
@@ -629,9 +709,10 @@
     }
 
     lastGood = parsed;
-    setStale(false);
+    setStale('');
     input.removeAttribute('aria-invalid');
     sentenceEl.className = 'sentence';
+    answerEl.classList.remove('is-error');
     sentenceEl.textContent = CE.describe(parsed);
     expandedEl.textContent = expandedText(parsed);
 
@@ -655,6 +736,7 @@
       renderOnce();
     } catch (err) {
       sentenceEl.className = 'sentence is-error';
+      answerEl.classList.add('is-error');
       sentenceEl.textContent = 'Could not render this expression: ' +
         ((err && err.message) || String(err));
       clear(runsEl);
