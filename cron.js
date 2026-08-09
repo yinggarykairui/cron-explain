@@ -711,7 +711,8 @@
               // of it kept their first left the list out of instant order —
               // 01:00, 01:15, 01:30 came back as 09:00Z, 09:15Z, 08:30Z — and
               // the count filled with second-pass entries before the genuine
-              // next run was ever reached. Reverted; see LESSONS.md.
+              // next run was ever reached. Reverted. The assertions that now
+              // start inside the first pass are what pins this shut.
               ms = at.getTime();
               if (ms <= fromMs) continue;
             }
