@@ -508,9 +508,11 @@
 
   // The same US fall-back, searched from *inside* the second pass. Every check
   // above starts before the seam, where the first pass of each repeated minute
-  // is still ahead and answers; from inside, the first pass of every minute in
-  // the hour has already gone by, and listing only first passes takes the whole
-  // repeated hour off the list rather than listing it once.
+  // is still ahead and answers. From inside the second pass the first pass of
+  // every minute in the hour is already over, and a repeated wall minute is
+  // listed once, at its first instant — so the hour has happened and the list
+  // has moved past it, exactly as cron does not re-fire on a clock that went
+  // back. These pin that far side of the seam.
   (function () {
     function repeatsAnHourLater(h, mi) {
       var first = new Date(2026, 10, 1, h, mi);
@@ -526,33 +528,35 @@
         zoneName() + ', so the search cannot start inside it here');
     } else {
       var firstPass = new Date(2026, 10, 1, 1, 30).getTime();   // 01:30, first pass
-      var secondPass = firstPass + 3600000;                     // 01:30, second pass
+      var nextDay = new Date(2026, 10, 2, 1, 30).getTime();     // 01:30 the following day
       var inside = new Date(firstPass + 45 * 60000);            // 01:15, second pass
 
       var daily = localRuns('30 1 * * *', inside, 2).runs;
-      eq('"30 1 * * *" from inside the repeated hour lists 01:30 that same day',
+      eq('"30 1 * * *": 01:30 is listed once, at its first instant, so from inside the ' +
+        'repeat the next listing is the following day',
         daily.map(function (r) { return CE.formatRun(r, false); }),
-        ['Sun 2026-11-01 01:30', 'Mon 2026-11-02 01:30']);
-      eq('and lists it at its second pass, the earliest instant still ahead',
-        daily.length ? daily[0].ms : null, secondPass);
+        ['Mon 2026-11-02 01:30', 'Tue 2026-11-03 01:30']);
+      eq('and the second pass of 01:30 is not listed as a run of its own',
+        daily.length ? daily[0].ms : null, nextDay);
       ok('those runs read back as the times they claim', readsBack(daily));
       ok('those runs strictly increase', strictlyIncreasing(daily));
 
       var hour = localRuns('* 1 1 11 *', inside, 60).runs;
       var sameDay = hour.filter(function (r) { return r.y === 2026 && r.mo === 11 && r.d === 1; });
-      eq('"* 1 1 11 *" from inside the repeated hour still lists that hour, not next year',
-        sameDay.length, 44);
-      eq('it resumes at the first minute strictly after "from"',
-        sameDay.length ? CE.formatRun(sameDay[0], false) : 'the hour was dropped whole',
-        'Sun 2026-11-01 01:16');
-      ok('every minute it lists is strictly after "from"', sameDay.every(function (r) {
+      eq('"* 1 1 11 *": every minute of the repeated hour was listed at its first instant, ' +
+        'so from inside the repeat the hour yields nothing further that day',
+        sameDay.length, 0);
+      eq('and the next listing is the same hour a year on, not a second pass',
+        hour.length ? CE.formatRun(hour[0], false) : 'nothing was listed at all',
+        'Mon 2027-11-01 01:00');
+      ok('every minute it lists is strictly after "from"', hour.every(function (r) {
         return r.ms > inside.getTime();
       }));
       (function () {
         var seen = {};
-        ok('no wall minute of the repeated hour is listed twice from inside it',
-          sameDay.every(function (r) {
-            var key = r.h + ':' + r.mi;
+        ok('no wall minute is listed twice from inside the repeated hour',
+          hour.every(function (r) {
+            var key = r.y + '-' + r.mo + '-' + r.d + ' ' + r.h + ':' + r.mi;
             if (seen[key]) return false;
             seen[key] = true;
             return true;
@@ -579,18 +583,120 @@
       var half = Math.round(back / 2);
       var from = new Date(fall.ms + 60000);         // one minute into the second pass
       var target = wallShift(fall.ms, half);        // a wall minute inside the repeat
+      var tomorrow = wallShift(fall.ms, half + 1440);   // the same wall minute, next day
       var expression = target.mi + ' ' + target.h + ' * * *';
       var runs = localRuns(expression, from, 5).runs;
 
       eq('"' + expression + '" finds five runs from inside the repeated hour', runs.length, 5);
-      ok('the first is the repeated wall minute ' + wallLabel(target) + ' itself',
-        runs.length > 0 && runs[0].y === target.y && runs[0].mo === target.mo &&
-        runs[0].d === target.d && runs[0].h === target.h && runs[0].mi === target.mi,
+      ok('the repeated wall minute ' + wallLabel(target) + ' is listed once, at its first ' +
+        'instant, so from inside the repeat the first run is ' + wallLabel(tomorrow),
+        runs.length > 0 && runs[0].y === tomorrow.y && runs[0].mo === tomorrow.mo &&
+        runs[0].d === tomorrow.d && runs[0].h === tomorrow.h && runs[0].mi === tomorrow.mi,
         runs.map(function (r) { return CE.formatRun(r, false); }).join(' | '));
-      eq('and it is listed at its second pass',
-        runs.length > 0 && runs[0].ms === fall.ms + half * 60000, true);
+      eq('and its second pass at ' + wallLabel(target) + ' is not listed as a run of its own',
+        runs.length > 0 && runs[0].ms ===
+          new Date(tomorrow.y, tomorrow.mo - 1, tomorrow.d, tomorrow.h, tomorrow.mi).getTime() &&
+        runs[0].ms !== fall.ms + half * 60000, true,
+        runs.length ? String(runs[0].ms) : 'no runs');
       ok('runs from inside the repeat read back as the times they claim', readsBack(runs));
       ok('runs from inside the repeat strictly increase', strictlyIncreasing(runs));
+    }
+  }());
+
+  // The window nothing above stands in: `from` inside the FIRST pass of a
+  // fall-back. Every other check starts before the seam (where every repeated
+  // minute's first pass is still ahead, so nothing has to be skipped) or inside
+  // the second pass (where the whole repeated hour is behind, so nothing is
+  // listed from it). In between, some candidates in the repeated hour are
+  // behind `from` and some are ahead — and that is the only place a scheduler
+  // walking candidates in ascending WALL-CLOCK order can emit them in the wrong
+  // INSTANT order. An evening change did exactly that and 313 assertions stayed
+  // green: "*/15 * * * *" came back 09:00Z, 09:15Z, 08:30Z, 08:45Z, 10:00Z, and
+  // "* * * * *" filled its five slots with 01:00–01:04 while the genuine next
+  // runs, 01:16–01:20, never appeared. Both are caught below.
+
+  // What the page promises, computed the other way round: walk real instants a
+  // minute at a time from `from` and take the first one that both matches and
+  // is the FIRST instant of its own wall minute. That last clause is the whole
+  // rule — a repeated wall minute is listed once, at its first instant, so an
+  // instant that is some minute's second pass is not a run. Nothing here shares
+  // a line with nextRuns' candidate loop, so it cannot inherit its ordering.
+  function firstListedAfter(expression, fromMs, searchMinutes) {
+    var parsed = parseSafe(expression);
+    if (!parsed.ok) return null;
+    var f = Object.create(null);
+    for (var i = 0; i < parsed.fields.length; i++) f[parsed.fields[i].key] = parsed.fields[i];
+    function has(field, value) {
+      for (var j = 0; j < field.values.length; j++) if (field.values[j] === value) return true;
+      return false;
+    }
+    var start = Math.ceil((fromMs + 1) / 60000) * 60000;
+    for (var k = 0; k < (searchMinutes || 1440); k++) {
+      var at = new Date(start + k * 60000);
+      if (!has(f.month, at.getMonth() + 1)) continue;
+      // Vixie's OR rule, the same shape cron.js uses.
+      var dayOk = (f.dom.star || f.dow.star)
+        ? (has(f.dom, at.getDate()) && has(f.dow, at.getDay()))
+        : (has(f.dom, at.getDate()) || has(f.dow, at.getDay()));
+      if (!dayOk) continue;
+      if (!has(f.hour, at.getHours()) || !has(f.minute, at.getMinutes())) continue;
+      var firstInstant = new Date(at.getFullYear(), at.getMonth(), at.getDate(),
+        at.getHours(), at.getMinutes()).getTime();
+      if (firstInstant !== at.getTime()) continue;   // a second pass is not a run
+      return at.getTime();
+    }
+    return null;
+  }
+
+  (function () {
+    var changes = findTransitions('2026-01-01T00:00:00Z', '2028-01-01T00:00:00Z');
+    var fall = null;
+    for (var i = 0; i < changes.length && !fall; i++) {
+      if (changes[i].after < changes[i].before) fall = changes[i];
+    }
+    if (!fall) {
+      skip('host zone ' + zoneName() + ' has no fall-back in 2026–2027, so a search ' +
+        'starting inside the first pass of a repeated hour cannot be set up here');
+      return;
+    }
+    var back = fall.before - fall.after;   // minutes of wall clock about to repeat
+    // Three starting points inside [transition − back, transition − 1min]: the
+    // first minute of the first pass, its middle, and its last minute.
+    var starts = [back, Math.max(1, Math.round(back / 2)), 1];
+    // Expressions that put several candidates inside the repeated hour, so
+    // there is something to get out of order.
+    var battery = ['* * * * *', '*/5 * * * *', '*/13 * * * *', '*/15 * * * *',
+      '0,30 * * * *', '@hourly'];
+    var COUNT = 8;
+
+    for (var e = 0; e < battery.length; e++) {
+      var expression = battery[e];
+      var outOfOrder = [];
+      var wrongOpening = [];
+      var unreadable = [];
+      for (var s = 0; s < starts.length; s++) {
+        var from = new Date(fall.ms - starts[s] * 60000);
+        var label = 'from ' + wallLabel(wallShift(from.getTime(), 0)) +
+          ' (' + starts[s] + ' min before the seam)';
+        var runs = localRuns(expression, from, COUNT).runs;
+        if (runs.length !== COUNT || !strictlyIncreasing(runs)) {
+          outOfOrder.push(label + ': ' + runs.map(function (r) { return r.ms; }).join(', '));
+        }
+        var expected = firstListedAfter(expression, from.getTime(), back + 24 * 60);
+        if (!runs.length || runs[0].ms !== expected) {
+          wrongOpening.push(label + ': opened at ' + (runs.length ? runs[0].ms : 'nothing') +
+            ', earliest listable is ' + expected);
+        }
+        if (!readsBack(runs)) unreadable.push(label);
+      }
+      ok('"' + expression + '" from inside the first pass of the fall-back emits ' + COUNT +
+        ' runs in strictly increasing instant order',
+        outOfOrder.length === 0, outOfOrder.join(' | '));
+      ok('"' + expression + '" from inside the first pass opens on the earliest instant ' +
+        'still listable after "from", with no later wall minute promoted in front of it',
+        wrongOpening.length === 0, wrongOpening.join(' | '));
+      ok('"' + expression + '" from inside the first pass reads back as the times it claims',
+        unreadable.length === 0, unreadable.join(' | '));
     }
   }());
 
@@ -716,7 +822,7 @@
     CE.describe(parseSafe('0 0 29 2 *')), 'At 00:00, on day 29 of the month, in February.');
   eq('an AND branch with a month stays trailing',
     CE.describe(parseSafe('0 0 */2 2 MON')),
-    'At 00:00, on every 2nd day of the month, and only on Monday, in February.');
+    'At 00:00, on every 2nd day of the month, restarting each month, and only on Monday, in February.');
   eq('"* * * * *" sentence', CE.describe(parseSafe('* * * * *')), 'Every minute.');
   eq('"*/15 * * * *" sentence', CE.describe(parseSafe('*/15 * * * *')), 'Every 15 minutes.');
   eq('"0 */6 * * *" lists the clock times', CE.describe(parseSafe('0 */6 * * *')),
@@ -748,7 +854,8 @@
   eq('"0 0 1-31 * *" drops a day-of-month range that leaves nothing out',
     CE.describe(parseSafe('0 0 1-31 * *')), 'At 00:00.');
   eq('"0 0 */2 * 0-6" keeps the restriction that is real and drops the one that is not',
-    CE.describe(parseSafe('0 0 */2 * 0-6')), 'At 00:00, on every 2nd day of the month.');
+    CE.describe(parseSafe('0 0 */2 * 0-6')),
+    'At 00:00, on every 2nd day of the month, restarting each month.');
 
   // The month field collapses on the same rule as the day fields: twelve values
   // is every month, so the clause names a restriction the run list does not
@@ -926,6 +1033,18 @@
       silent.length === 0, silent.join(' | '));
   }());
 
+  // The sentence has to carry the same caveat as the table beside it, or the
+  // two halves of the page disagree in the reader's eye: the table says the
+  // step restarts on the 1st, the sentence used to promise a plain cadence.
+  eq('a day-of-month step sentence carries the restart clause the table states',
+    CE.describe(parseSafe('0 0 */5 * *')),
+    'At 00:00, on every 5th day of the month, restarting each month.');
+  // ...and the clause is the step's alone. A listed or single day of the month
+  // has no period to restart, so nothing is appended to it.
+  eq('a day-of-month with no step keeps its plain sentence, with no restart clause',
+    CE.describe(parseSafe('0 0 5,20 * *')),
+    'At 00:00, on days 5 and 20 of the month.');
+
   // "*/1" is "*" with extra characters: it restricts nothing, so it must not
   // add a clause. "on every 1st day of the month" means every day.
   eq('"0 0 */1 * *" is every day, not "every 1st day"',
@@ -1012,7 +1131,8 @@
   // consecutive values are a pair, three are a run), and relativeHint's
   // 48-hour boundary. Each fails if its line is changed.
   eq('an ordinal ending in 1 is "21st", not "21th"',
-    CE.describe(parseSafe('0 0 */21 * *')), 'At 00:00, on every 21st day of the month.');
+    CE.describe(parseSafe('0 0 */21 * *')),
+    'At 00:00, on every 21st day of the month, restarting each month.');
   eq('ordinals 2nd, 3rd and 11th', [CE.fieldRows(parseSafe('*/2 * * * *'))[0].meaning,
     CE.fieldRows(parseSafe('*/3 * * * *'))[0].meaning,
     CE.fieldRows(parseSafe('*/11 * * * *'))[0].meaning].map(function (m) { return m.split(':')[0]; }),

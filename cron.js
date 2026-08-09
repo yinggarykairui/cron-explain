@@ -395,7 +395,11 @@
   function domPhrase(dom) {
     if (selectsEveryDay(dom)) return '';
     var step = starStep(dom.raw);
-    if (step) return 'on every ' + ordinal(step) + ' day of the month';
+    // The step restarts on the 1st of every month, and a month is 28 to 31
+    // days, so no day-of-month step keeps a strict period — not even "*/31".
+    // The field table says so; without this the sentence next to it claimed
+    // the cadence the table was busy denying.
+    if (step) return 'on every ' + ordinal(step) + ' day of the month, restarting each month';
     return 'on ' + (dom.values.length === 1 ? 'day ' : 'days ') +
       compactList(dom.values, numberName) + ' of the month';
   }
@@ -607,12 +611,6 @@
 
   var HORIZON_YEARS = 50;
 
-  // How far a fall-back can push a wall-clock minute's second instant past its
-  // first: half an hour (Lord Howe), an hour (almost everywhere), or two
-  // (Antarctica/Troll). Probed in order; a probe that does not read back as the
-  // same wall minute is simply not a repeat of it.
-  var FOLD_SHIFTS = Object.freeze([30, 60, 120]);
-
   function toSet(values) {
     var set = Object.create(null);
     for (var i = 0; i < values.length; i++) set[values[i]] = true;
@@ -698,32 +696,29 @@
               // that has a transition; the dropped day is not reachable from a
               // host zone, so nothing asserts it.
               if (!readsBackAs(at, cy, cm - 1, cd, h, m)) continue;
-              // A fall-back repeats a wall-clock minute, and the page promises
-              // that such a minute is listed once. new Date(y, mo, d, h, mi)
-              // resolves an ambiguous local time to its FIRST instant, so the
-              // second pass has to be probed for: a shift that reads back as
-              // the same wall minute is the repeat of it. Listing the earliest
-              // instant still ahead of `from` is what makes "once" true from
-              // both sides of the seam — before it the first pass answers, and
-              // from inside it the second pass does, instead of the whole
-              // repeated hour dropping out of the list for having a first pass
-              // that is already over.
-              ms = at.getTime() > fromMs ? at.getTime() : null;
-              for (var fs = 0; fs < FOLD_SHIFTS.length; fs++) {
-                var again = new Date(at.getTime() + FOLD_SHIFTS[fs] * 60000);
-                if (!readsBackAs(again, cy, cm - 1, cd, h, m)) continue;
-                var againMs = again.getTime();
-                if (againMs > fromMs && (ms === null || againMs < ms)) ms = againMs;
-              }
-              if (ms === null) continue;
-              // The run carries the instant it was chosen at, not the first
-              // pass, so formatting and the relative hint agree with `ms`.
-              at = new Date(ms);
+              // A fall-back repeats a wall-clock minute, and this page lists
+              // such a minute ONCE — at its first instant, which is the one
+              // new Date(y, mo, d, h, mi) resolves an ambiguous local time to.
+              // Real cron does not re-fire a job because the clock went back,
+              // so a minute whose first pass is already behind `from` has
+              // happened and is not listed again. That is why, sitting inside
+              // the repeated hour, the list has already moved past it.
+              //
+              // An evening cycle tried to make the second pass answer there
+              // instead. It could not: the inner loop walks candidates in
+              // ascending WALL-CLOCK order, so promoting the minutes already
+              // behind `from` to their second instant while the minutes ahead
+              // of it kept their first left the list out of instant order —
+              // 01:00, 01:15, 01:30 came back as 09:00Z, 09:15Z, 08:30Z — and
+              // the count filled with second-pass entries before the genuine
+              // next run was ever reached. Reverted; see LESSONS.md.
+              ms = at.getTime();
+              if (ms <= fromMs) continue;
             }
-            // Candidates are generated in ascending wall-clock order and each
-            // one resolves to a strictly later instant than the last, so the
-            // list increases on its own. A guard against a non-increasing ms
-            // used to sit here; it never fired in any zone.
+            // Candidates are generated in ascending wall-clock order, and each
+            // one maps to a strictly later instant, so the list increases on
+            // its own. assertIncreasing in tests.html now pins that from inside
+            // both passes of a fall-back, which is where it stopped being true.
             runs.push({ ms: ms, date: at, y: cy, mo: cm, d: cd, h: h, mi: m, dow: cw });
           }
         }
