@@ -121,13 +121,17 @@
   .answer {
     min-height: 6rem;      /* measured: tallest error at >=768px is 95.6px */
     margin: 1rem 0 0;
-    padding: 0 0 0 .9rem;
-    border-left: 3px solid var(--accent);
   }
-  .answer p { margin: 0; }
+  /* The accent rule sits on the paragraphs, not on the block, so it stops
+     where the text stops. On the block it ran the full reserved height and
+     drew a line down 100px of deliberate whitespace, which advertised the
+     emptiness instead of absorbing it. Empty paragraphs are display:none,
+     so they contribute no rule; the visible ones butt together because the
+     gap between them is padding inside the rule, not margin outside it. */
+  .answer p { margin: 0; padding-left: .9rem; border-left: 3px solid var(--accent); }
   /* An empty paragraph must not reserve its margins on top of the block's. */
   .answer p:empty { display: none; }
-  #expanded, #stale { margin-top: .35rem; }
+  #expanded, #stale { padding-top: .35rem; }
   .sentence { font-size: 1.6rem; font-weight: 500; line-height: 1.4; margin: 0; }
   .sentence.is-error { color: var(--error); font-size: .95rem; font-weight: 400; line-height: 1.45; }
 

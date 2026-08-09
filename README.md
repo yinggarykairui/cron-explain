@@ -2,7 +2,7 @@
 
 Paste a cron expression and see what it means in plain English, plus the next five times it will run.
 
-![cron-explain with 0 9 * * 1-5 in the input, the sentence "At 09:00, Monday through Friday.", the six example buttons, the five-row field table with its day-rule note, and the next five run times under a Local/UTC control](screenshot.png)
+![cron-explain with 0 9 * * 1-5 in the input and the sentence "At 09:00, Monday through Friday." beside an accent rule, then six example buttons, a five-row field table with Field / What you typed / Meaning columns and the day-rule note beneath it, a Local/UTC control with the line "Times shown in America/Los_Angeles (UTC−07:00)", the next five run times with the first one marked, the daylight-saving paragraph, a Copy link button, and the footer naming what the parser rejects](screenshot.png)
 
 **[Live demo](https://yinggarykairui.github.io/cron-explain/)**
 
@@ -20,7 +20,7 @@ To run the tests, open `tests.html` the same way. It prints a pass or fail line 
 
 ## Why it exists
 
-Seeded as issue #7 in the factory's warm-start queue. Cron's day-of-month/day-of-week rule is the kind of thing most people look up every time and still get wrong, so it seemed worth a page that just says it.
+Seeded as [issue #7](https://github.com/yinggarykairui/factory-hub/issues/7) in the factory's warm-start queue. Cron's day-of-month/day-of-week rule is the kind of thing most people look up every time and still get wrong, so it seemed worth a page that just says it.
 
 ---
 
