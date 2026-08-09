@@ -252,10 +252,22 @@
 
   eq('day-rule note says OR when neither field is starred',
     /or/i.test(CE.dayRuleNote(parseSafe('0 0 1 * MON'))), true);
-  eq('day-rule note says AND when dow is starred',
-    /and/i.test(CE.dayRuleNote(parseSafe('0 0 1 * *'))), true);
-  eq('day-rule note says AND when dom is starred',
-    /and/i.test(CE.dayRuleNote(parseSafe('0 0 * * MON'))), true);
+  // With one day field live there is nothing for an "(AND)" label to be about,
+  // and next to "alone decides" it reads as a contradiction. The two notes say
+  // which field decides and stop there.
+  eq('day-rule note hands the day to day-of-month when dow is starred',
+    CE.dayRuleNote(parseSafe('0 0 1 * *')),
+    'Day-of-week is *, so the day-of-month field alone decides which days match.');
+  eq('day-rule note hands the day to day-of-week when dom is starred',
+    CE.dayRuleNote(parseSafe('0 0 * * MON')),
+    'Day-of-month is *, so the day-of-week field alone decides which days match.');
+  ok('neither single-field note contradicts "alone decides" with an (AND) label',
+    !/\(AND\)/.test(CE.dayRuleNote(parseSafe('0 0 1 * *'))) &&
+    !/\(AND\)/.test(CE.dayRuleNote(parseSafe('0 0 * * MON'))),
+    CE.dayRuleNote(parseSafe('0 0 1 * *')) + ' | ' + CE.dayRuleNote(parseSafe('0 0 * * MON')));
+  ok('the note still names the AND where both day fields are live',
+    /\(AND\)/.test(CE.dayRuleNote(parseSafe('0 0 */2 * MON'))),
+    CE.dayRuleNote(parseSafe('0 0 */2 * MON')));
   eq('day-rule note says every day when both are starred',
     /every day/i.test(CE.dayRuleNote(parseSafe('0 0 * * *'))), true);
   ok('day-rule note explains the AND-because-star case and quotes the field',
@@ -494,6 +506,94 @@
     }
   }());
 
+  // The same US fall-back, searched from *inside* the second pass. Every check
+  // above starts before the seam, where the first pass of each repeated minute
+  // is still ahead and answers; from inside, the first pass of every minute in
+  // the hour has already gone by, and listing only first passes takes the whole
+  // repeated hour off the list rather than listing it once.
+  (function () {
+    function repeatsAnHourLater(h, mi) {
+      var first = new Date(2026, 10, 1, h, mi);
+      var later = new Date(first.getTime() + 3600000);
+      return later.getDate() === first.getDate() && later.getHours() === h &&
+        later.getMinutes() === mi;
+    }
+    var hourOneRepeats = repeatsAnHourLater(1, 0) && repeatsAnHourLater(1, 15) &&
+      repeatsAnHourLater(1, 30) && repeatsAnHourLater(1, 59) &&
+      !repeatsAnHourLater(0, 59) && !repeatsAnHourLater(2, 0);
+    if (!hourOneRepeats) {
+      skip('2026-11-01 01:00–01:59 is not an hour repeated by a one-hour fall-back in ' +
+        zoneName() + ', so the search cannot start inside it here');
+    } else {
+      var firstPass = new Date(2026, 10, 1, 1, 30).getTime();   // 01:30, first pass
+      var secondPass = firstPass + 3600000;                     // 01:30, second pass
+      var inside = new Date(firstPass + 45 * 60000);            // 01:15, second pass
+
+      var daily = localRuns('30 1 * * *', inside, 2).runs;
+      eq('"30 1 * * *" from inside the repeated hour lists 01:30 that same day',
+        daily.map(function (r) { return CE.formatRun(r, false); }),
+        ['Sun 2026-11-01 01:30', 'Mon 2026-11-02 01:30']);
+      eq('and lists it at its second pass, the earliest instant still ahead',
+        daily.length ? daily[0].ms : null, secondPass);
+      ok('those runs read back as the times they claim', readsBack(daily));
+      ok('those runs strictly increase', strictlyIncreasing(daily));
+
+      var hour = localRuns('* 1 1 11 *', inside, 60).runs;
+      var sameDay = hour.filter(function (r) { return r.y === 2026 && r.mo === 11 && r.d === 1; });
+      eq('"* 1 1 11 *" from inside the repeated hour still lists that hour, not next year',
+        sameDay.length, 44);
+      eq('it resumes at the first minute strictly after "from"',
+        sameDay.length ? CE.formatRun(sameDay[0], false) : 'the hour was dropped whole',
+        'Sun 2026-11-01 01:16');
+      ok('every minute it lists is strictly after "from"', sameDay.every(function (r) {
+        return r.ms > inside.getTime();
+      }));
+      (function () {
+        var seen = {};
+        ok('no wall minute of the repeated hour is listed twice from inside it',
+          sameDay.every(function (r) {
+            var key = r.h + ':' + r.mi;
+            if (seen[key]) return false;
+            seen[key] = true;
+            return true;
+          }));
+      }());
+      ok('runs from inside the repeated hour read back as the times they claim', readsBack(hour));
+      ok('runs from inside the repeated hour strictly increase', strictlyIncreasing(hour));
+    }
+  }());
+
+  // The same case wherever the host zone puts its fall-back, so a zone with a
+  // half-hour or two-hour shift is covered too.
+  (function () {
+    var changes = findTransitions('2026-01-01T00:00:00Z', '2028-01-01T00:00:00Z');
+    var fall = null;
+    for (var i = 0; i < changes.length && !fall; i++) {
+      if (changes[i].after < changes[i].before) fall = changes[i];
+    }
+    if (!fall) {
+      skip('host zone ' + zoneName() + ' has no fall-back in 2026–2027, so a search ' +
+        'starting inside a repeated hour cannot be set up here');
+    } else {
+      var back = fall.before - fall.after;          // minutes of wall clock repeated
+      var half = Math.round(back / 2);
+      var from = new Date(fall.ms + 60000);         // one minute into the second pass
+      var target = wallShift(fall.ms, half);        // a wall minute inside the repeat
+      var expression = target.mi + ' ' + target.h + ' * * *';
+      var runs = localRuns(expression, from, 5).runs;
+
+      eq('"' + expression + '" finds five runs from inside the repeated hour', runs.length, 5);
+      ok('the first is the repeated wall minute ' + wallLabel(target) + ' itself',
+        runs.length > 0 && runs[0].y === target.y && runs[0].mo === target.mo &&
+        runs[0].d === target.d && runs[0].h === target.h && runs[0].mi === target.mi,
+        runs.map(function (r) { return CE.formatRun(r, false); }).join(' | '));
+      eq('and it is listed at its second pass',
+        runs.length > 0 && runs[0].ms === fall.ms + half * 60000, true);
+      ok('runs from inside the repeat read back as the times they claim', readsBack(runs));
+      ok('runs from inside the repeat strictly increase', strictlyIncreasing(runs));
+    }
+  }());
+
   // Zone-independent, fixed `from:`: whatever the host zone, a listed local run
   // reads back as its own wall clock and no wall minute appears twice.
   (function () {
@@ -535,6 +635,11 @@
   rejects('0 0 LW * *', 'quartz');
   rejects('0 0 * * 5#3', 'quartz');
   rejects('0 0 C * *', 'quartz');
+  // Atoms are split on "-" too, so Quartz's "L-3" arrives as "L" and "3" and
+  // is named by its "L" half. Nothing needs to match the hyphenated form.
+  rejects('0 0 L-3 * *', 'quartz');
+  ok('"L-3" is named by its "L" half', CE.parse('0 0 L-3 * *').error.message.indexOf('"L"') >= 0,
+    CE.parse('0 0 L-3 * *').error.message);
 
   rejects('60 * * * *', 'outside 0–59');
   rejects('* 24 * * *', 'outside 0–23');
@@ -644,6 +749,25 @@
     CE.describe(parseSafe('0 0 1-31 * *')), 'At 00:00.');
   eq('"0 0 */2 * 0-6" keeps the restriction that is real and drops the one that is not',
     CE.describe(parseSafe('0 0 */2 * 0-6')), 'At 00:00, on every 2nd day of the month.');
+
+  // The month field collapses on the same rule as the day fields: twelve values
+  // is every month, so the clause names a restriction the run list does not
+  // have. Gating on the raw text left "in January through December" standing.
+  eq('"0 0 * 1-12 *" drops a month range that leaves nothing out',
+    CE.describe(parseSafe('0 0 * 1-12 *')), 'At 00:00.');
+  eq('"0 0 * JAN-DEC *" drops it by name too',
+    CE.describe(parseSafe('0 0 * JAN-DEC *')), 'At 00:00.');
+  eq('a twelve-item month list drops it as well',
+    CE.describe(parseSafe('0 0 * 1,2,3,4,5,6,7,8,9,10,11,12 *')), 'At 00:00.');
+  eq('"0 0 15 1-12 FRI" keeps the OR day rule with no month clause in front of it',
+    CE.describe(parseSafe('0 0 15 1-12 FRI')), 'At 00:00, on day 15 of the month, or on Friday.');
+  // ...and a month field that really does restrict still says so.
+  eq('"0 0 * 1-11 *" keeps a month range that leaves December out',
+    CE.describe(parseSafe('0 0 * 1-11 *')), 'At 00:00, in January through November.');
+  eq('"0 0 * 2 *" keeps a single month', CE.describe(parseSafe('0 0 * 2 *')), 'At 00:00, in February.');
+  eq('the runs behind the collapsed month are in every month',
+    stampsUtc('0 0 1 1-12 *', '2026-08-08T12:00:00Z', 3),
+    ['Tue 2026-09-01 00:00 UTC', 'Thu 2026-10-01 00:00 UTC', 'Sun 2026-11-01 00:00 UTC']);
   (function () {
     var cancels = [];
     var expressions = ['0 0 15 3 0-6', '0 0 15 * 0-6', '0 0 * * 0-6', '0 0 * * 0-7',
@@ -749,6 +873,59 @@
     CE.fieldRows(parseSafe('*/15 * * * *'))[0].meaning,
     'Every 15th minute: 0, 15, 30 and 45');
 
+  // A month step restarts at January every year, so "every 5th month" is only
+  // true of the gaps when 5 divides 12. It does not: January, June, November,
+  // January is a two-month gap, and the sentence has to say so — the field
+  // table on the same screen already does.
+  eq('"0 0 1 */5 *" names the restart in the sentence, not just the table',
+    CE.describe(parseSafe('0 0 1 */5 *')),
+    'At 00:00, on day 1 of the month, in every 5th month, restarting each year.');
+  eq('and the sentence agrees with the field table',
+    CE.fieldRows(parseSafe('0 0 1 */5 *'))[3].meaning,
+    'Every 5th month, restarting each year: January, June and November');
+  eq('the runs under that sentence really do gap by two months',
+    stampsUtc('0 0 1 */5 *', '2026-01-15T00:00:00Z', 4),
+    ['Mon 2026-06-01 00:00 UTC', 'Sun 2026-11-01 00:00 UTC', 'Fri 2027-01-01 00:00 UTC',
+      'Tue 2027-06-01 00:00 UTC']);
+  eq('a month step that does divide the year keeps the plain phrase',
+    CE.describe(parseSafe('0 0 1 */6 *')),
+    'At 00:00, on day 1 of the month, in every 6th month.');
+  eq('and its runs are six months apart, as it says',
+    stampsUtc('0 0 1 */6 *', '2026-01-15T00:00:00Z', 3),
+    ['Wed 2026-07-01 00:00 UTC', 'Fri 2027-01-01 00:00 UTC', 'Thu 2027-07-01 00:00 UTC']);
+  (function () {
+    var wrong = [];
+    for (var s = 2; s <= 12; s++) {
+      var text = CE.describe(parseSafe('0 0 1 */' + s + ' *'));
+      if (12 % s !== 0 && text.indexOf('restarting each year') < 0) wrong.push('*/' + s + ': ' + text);
+      if (12 % s === 0 && text.indexOf('restarting') >= 0) wrong.push('*/' + s + ': ' + text);
+    }
+    ok('every month step states its restart if and only if it has one',
+      wrong.length === 0, wrong.join(' | '));
+  }());
+
+  // Months are 28 to 31 days long, so a day-of-month step never keeps a strict
+  // period, whatever it divides. "*/31" is day 1 of every month.
+  eq('the field table names the restart a day-of-month step cannot avoid',
+    CE.fieldRows(parseSafe('0 0 */31 * *'))[2].meaning,
+    'Every 31st day, restarting each month: 1');
+  eq('the runs behind it are 28, 31 and 30 days apart, never 31 throughout',
+    stampsUtc('0 0 */31 * *', '2026-01-01T12:00:00Z', 4),
+    ['Sun 2026-02-01 00:00 UTC', 'Sun 2026-03-01 00:00 UTC', 'Wed 2026-04-01 00:00 UTC',
+      'Fri 2026-05-01 00:00 UTC']);
+  eq('a smaller day-of-month step says it too',
+    CE.fieldRows(parseSafe('0 0 */2 * *'))[2].meaning,
+    'Every 2nd day, restarting each month: 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29 and 31');
+  (function () {
+    var silent = [];
+    for (var s = 2; s <= 31; s++) {
+      var meaning = CE.fieldRows(parseSafe('0 0 */' + s + ' * *'))[2].meaning;
+      if (meaning.indexOf('restarting each month') < 0) silent.push('*/' + s + ': ' + meaning);
+    }
+    ok('no day-of-month step claims a period the calendar cannot deliver',
+      silent.length === 0, silent.join(' | '));
+  }());
+
   // "*/1" is "*" with extra characters: it restricts nothing, so it must not
   // add a clause. "on every 1st day of the month" means every day.
   eq('"0 0 */1 * *" is every day, not "every 1st day"',
@@ -782,9 +959,32 @@
   eq('a truncated day list keeps "of the month" attached to "days"',
     CE.describe(parseSafe('0 0 1,3,5,7,9,11,13,15,17 * *')),
     'At 00:00, on days 1, 3, 5, 7, 9, 11, 13 (and 2 more) of the month.');
-  eq('the field table truncates the same way',
+  // The sentence truncates so it stays a sentence. The table does not: it is
+  // the place the page answers "does it fire at 22:00?", and "(and 5 more)"
+  // in the Meaning column is the one thing that cannot answer it.
+  eq('the field table prints the whole list the sentence truncated',
     CE.fieldRows(parseSafe('0 0 1,3,5,7,9,11,13,15,17 * *'))[2].meaning,
-    'Days 1, 3, 5, 7, 9, 11, 13 (and 2 more)');
+    'Days 1, 3, 5, 7, 9, 11, 13, 15 and 17');
+  eq('the hour row of "0 */2 * * *" says whether it fires at 22:00',
+    CE.fieldRows(parseSafe('0 */2 * * *'))[1].meaning,
+    'Every 2nd hour: 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20 and 22');
+  eq('the sentence for the same expression still truncates',
+    CE.describe(parseSafe('0 */2 * * *')),
+    'At minute 0 of hours 0, 2, 4, 6, 8, 10, 12 (and 5 more).');
+  eq('the longest list a field can hold is printed whole',
+    CE.fieldRows(parseSafe('*/2 * * * *'))[0].meaning.split(': ')[1].split(', ').length, 29);
+  (function () {
+    var truncated = [];
+    var expressions = ['0 */2 * * *', '*/2 * * * *', '*/7 * * * *', '0 0 1,3,5,7,9,11,13,15,17 * *',
+      '5 1,3,5,7,9,11,13,15,17,19,21 * * *', '0 0 * 1,3,5,7,9,11 *', '0 0 */2 * *'];
+    for (var i = 0; i < expressions.length; i++) {
+      var rows = CE.fieldRows(parseSafe(expressions[i]));
+      for (var j = 0; j < rows.length; j++) {
+        if (/and \d+ more/.test(rows[j].meaning)) truncated.push(expressions[i] + ': ' + rows[j].meaning);
+      }
+    }
+    ok('no field-table row truncates its value list', truncated.length === 0, truncated.join(' | '));
+  }());
   (function () {
     var expressions = ['0 0 1,3,5,7,9,11,13,15,17 * *', '*/7 * * * *', '*/7 * 1,3,5,7,9,11,13,15,17 * *',
       '5 1,3,5,7,9,11,13,15,17,19,21 * * *'];

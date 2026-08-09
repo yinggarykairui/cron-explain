@@ -50,8 +50,10 @@
   });
 
   // Quartz-only atoms. Detected before general parsing so the message can name
-  // the token instead of complaining that "L" is not a number.
-  var QUARTZ_ATOM = /^(\?|L|W|LW|C|\d+[LW]|L-\d+)$/i;
+  // the token instead of complaining that "L" is not a number. Atoms are split
+  // on "-" as well as "," and "/", so a token here never contains a hyphen:
+  // Quartz's "L-3" arrives as "L" and "3", and the "L" alternative names it.
+  var QUARTZ_ATOM = /^(\?|L|W|LW|C|\d+[LW])$/i;
 
   // Space characters that look like separators but are not. \s in JS matches
   // NBSP, so this check must run before splitting or the failure is invisible.
@@ -405,10 +407,26 @@
     return text.indexOf(' through ') >= 0 ? text : 'on ' + text;
   }
 
+  // A month field that holds all twelve months restricts nothing, however it
+  // was written: "1-12" and "JAN-DEC" leave no month out, exactly as "*" does.
+  // The count covers "*" and "*/1" as well, the same way selectsEveryDay does
+  // for the day fields. Gating on the raw text instead put "in January through
+  // December" on a sentence whose run list excludes nothing.
+  function selectsEveryMonth(month) {
+    return month.values.length === 12;
+  }
+
   function monthPhrase(month) {
-    if (isEveryValue(month)) return '';
+    if (selectsEveryMonth(month)) return '';
     var step = starStep(month.raw);
-    if (step) return 'in every ' + ordinal(step) + ' month';
+    // The step restarts at January every year, so it is only a cadence when it
+    // divides the twelve. "*/5" is January, June and November and then January
+    // again — a two-month gap that "every 5th month" alone would deny, and the
+    // field table on the same screen already names the restart.
+    if (step) {
+      return 'in every ' + ordinal(step) + ' month' +
+        (12 % step === 0 ? '' : ', restarting each year');
+    }
     return 'in ' + compactList(month.values, monthName);
   }
 
@@ -435,7 +453,9 @@
 
   function dayRuleNote(parsed) {
     // Errors and @reboot have no day fields; callers may hand either over.
-    if (!parsed || !parsed.ok || parsed.reboot || parsed.fields.length !== 5) return '';
+    // Anything else that parsed has five fields — the count is checked before
+    // a result can be ok — so there is no third shape to guard against here.
+    if (!parsed || !parsed.ok || parsed.reboot) return '';
     var dom = fieldOf(parsed, 'dom');
     var dow = fieldOf(parsed, 'dow');
     if (!dom.star && !dow.star) {
@@ -444,11 +464,15 @@
     if (dom.raw === '*' && dow.raw === '*') {
       return 'Both day fields are *, so every day matches.';
     }
+    // One field left live: the AND is still what Vixie evaluates, but naming it
+    // here reads as a contradiction — "alone decides" and "(AND)" in the same
+    // sentence, for exactly the reader this note exists to help. The label is
+    // kept where two live fields make it the whole point, above and below.
     if (dom.raw === '*') {
-      return 'Day-of-month is *, so the day-of-week field alone decides which days match (AND).';
+      return 'Day-of-month is *, so the day-of-week field alone decides which days match.';
     }
     if (dow.raw === '*') {
-      return 'Day-of-week is *, so the day-of-month field alone decides which days match (AND).';
+      return 'Day-of-week is *, so the day-of-month field alone decides which days match.';
     }
     // What is left is a star-prefixed step such as "*/2": it restricts which
     // days run, yet Vixie's star flag is literal, so the field still counts as
@@ -492,13 +516,24 @@
     return parts.join(', ') + '.';
   }
 
+  // The table is the exhaustive half of the page: the sentence truncates a long
+  // list so it stays a sentence, but the table is where "does it fire at 22:00?"
+  // has to be answerable. Sixty is the most values any field can hold, and they
+  // group into at most thirty, so this limit never truncates. The column wraps
+  // (table-layout: fixed) so a full list costs height, not layout.
+  var TABLE_LIST_LIMIT = 60;
+
   // A step that does not divide its range runs out before the range does and
   // starts again from the bottom: "*/45" is minutes 0 and 45, then the hour
   // rolls over. Saying so keeps the table and the run list from disagreeing.
+  // `span` is the length of the cycle the step restarts on, or 0 where that
+  // cycle has no fixed length: months are 28 to 31 days, so every day-of-month
+  // step restarts, and "*/31" is day 1 of each month at gaps of 28, 31 and 30
+  // — never the strict 31 that a span of 31 would have claimed.
   function stepMeaning(step, noun, span, cycle, values, nameFn) {
     return 'Every ' + ordinal(step) + ' ' + noun +
-      (span % step === 0 ? '' : ', restarting each ' + cycle) +
-      ': ' + compactList(values, nameFn);
+      (span && span % step === 0 ? '' : ', restarting each ' + cycle) +
+      ': ' + compactList(values, nameFn, TABLE_LIST_LIMIT);
   }
 
   function meaningOf(field) {
@@ -508,22 +543,24 @@
       case 'minute':
         if (everything) return 'Every minute (0–59)';
         if (step) return stepMeaning(step, 'minute', 60, 'hour', field.values, numberName);
-        return (field.values.length === 1 ? 'Minute ' : 'Minutes ') + compactList(field.values, numberName);
+        return (field.values.length === 1 ? 'Minute ' : 'Minutes ') + compactList(field.values, numberName, TABLE_LIST_LIMIT);
       case 'hour':
         if (everything) return 'Every hour (0–23)';
         if (step) return stepMeaning(step, 'hour', 24, 'day', field.values, numberName);
-        return (field.values.length === 1 ? 'Hour ' : 'Hours ') + compactList(field.values, numberName);
+        return (field.values.length === 1 ? 'Hour ' : 'Hours ') + compactList(field.values, numberName, TABLE_LIST_LIMIT);
       case 'dom':
         if (everything) return 'Every day of the month';
-        if (step) return stepMeaning(step, 'day', 31, 'month', field.values, numberName);
-        return (field.values.length === 1 ? 'Day ' : 'Days ') + compactList(field.values, numberName);
+        // A month is not 31 days long, so a day-of-month step never keeps a
+        // strict period: 0 is passed for the cycle length to say exactly that.
+        if (step) return stepMeaning(step, 'day', 0, 'month', field.values, numberName);
+        return (field.values.length === 1 ? 'Day ' : 'Days ') + compactList(field.values, numberName, TABLE_LIST_LIMIT);
       case 'month':
         if (everything) return 'Every month';
         if (step) return stepMeaning(step, 'month', 12, 'year', field.values, monthName);
-        return compactList(field.values, monthName);
+        return compactList(field.values, monthName, TABLE_LIST_LIMIT);
       default:
         if (everything) return 'Every day of the week';
-        return compactList(field.values, dayName) + (field.values.indexOf(0) >= 0 ? ' (0 and 7 both mean Sunday)' : '');
+        return compactList(field.values, dayName, TABLE_LIST_LIMIT) + (field.values.indexOf(0) >= 0 ? ' (0 and 7 both mean Sunday)' : '');
     }
   }
 
@@ -547,9 +584,10 @@
       ' ' + pad2(run.h) + ':' + pad2(run.mi) + (utc ? ' UTC' : '');
   }
 
+  // Only ever called with a run time, and every listed run is strictly after
+  // the instant the list was built from, so `toMs` is never behind `fromMs`.
   function relativeHint(fromMs, toMs) {
     var minutes = Math.floor((toMs - fromMs) / 60000);
-    if (minutes < 0) return 'now';
     if (minutes < 1) return 'in less than a minute';
     if (minutes < 60) return 'in ' + minutes + ' minute' + (minutes === 1 ? '' : 's');
     var hours = Math.floor(minutes / 60);
@@ -569,10 +607,27 @@
 
   var HORIZON_YEARS = 50;
 
+  // How far a fall-back can push a wall-clock minute's second instant past its
+  // first: half an hour (Lord Howe), an hour (almost everywhere), or two
+  // (Antarctica/Troll). Probed in order; a probe that does not read back as the
+  // same wall minute is simply not a repeat of it.
+  var FOLD_SHIFTS = Object.freeze([30, 60, 120]);
+
   function toSet(values) {
     var set = Object.create(null);
     for (var i = 0; i < values.length; i++) set[values[i]] = true;
     return set;
+  }
+
+  // True when a local Date reads back as the wall-clock parts it was built
+  // from. Both halves are live. The hour and minute are what a daylight-saving
+  // jump moves: 02:30 on a spring forward reads back as 03:30, and a half-hour
+  // jump (Lord Howe) moves the minute alone. The date is compared because a
+  // zone can drop a whole calendar day instead — Pacific/Apia had no
+  // 2011-12-30, and 09:00 that day reads back as 09:00 on the 31st.
+  function readsBackAs(at, y, mo0, d, h, mi) {
+    return at.getFullYear() === y && at.getMonth() === mo0 && at.getDate() === d &&
+      at.getHours() === h && at.getMinutes() === mi;
   }
 
   function nextRuns(parsed, options) {
@@ -632,30 +687,43 @@
             var m = minute.values[mi];
             var at = utc ? new Date(Date.UTC(cy, cm - 1, cd, h, m, 0, 0))
               : new Date(cy, cm - 1, cd, h, m, 0, 0);
-            if (!utc) {
+            var ms;
+            if (utc) {
+              ms = at.getTime();
+              if (ms <= fromMs) continue;
+            } else {
               // A wall-clock time that does not read back as the time it was
               // built from does not exist in this zone, so it is not listed.
-              // Both halves of the comparison are live. The hour and minute
-              // are what a daylight-saving jump moves: 02:30 on a spring
-              // forward reads back as 03:30, and a half-hour jump (Lord Howe)
-              // moves the minute alone. The date is compared because a zone
-              // can drop a whole calendar day instead — Pacific/Apia had no
-              // 2011-12-30, and 09:00 that day reads back as 09:00 on the
-              // 31st. tests.html covers the daylight-saving half in any host
-              // zone that has a transition; the dropped day is not reachable
-              // from a host zone, so nothing asserts it.
-              if (at.getFullYear() !== cy || at.getMonth() !== cm - 1 || at.getDate() !== cd ||
-                at.getHours() !== h || at.getMinutes() !== m) continue;
+              // tests.html covers the daylight-saving half in any host zone
+              // that has a transition; the dropped day is not reachable from a
+              // host zone, so nothing asserts it.
+              if (!readsBackAs(at, cy, cm - 1, cd, h, m)) continue;
+              // A fall-back repeats a wall-clock minute, and the page promises
+              // that such a minute is listed once. new Date(y, mo, d, h, mi)
+              // resolves an ambiguous local time to its FIRST instant, so the
+              // second pass has to be probed for: a shift that reads back as
+              // the same wall minute is the repeat of it. Listing the earliest
+              // instant still ahead of `from` is what makes "once" true from
+              // both sides of the seam — before it the first pass answers, and
+              // from inside it the second pass does, instead of the whole
+              // repeated hour dropping out of the list for having a first pass
+              // that is already over.
+              ms = at.getTime() > fromMs ? at.getTime() : null;
+              for (var fs = 0; fs < FOLD_SHIFTS.length; fs++) {
+                var again = new Date(at.getTime() + FOLD_SHIFTS[fs] * 60000);
+                if (!readsBackAs(again, cy, cm - 1, cd, h, m)) continue;
+                var againMs = again.getTime();
+                if (againMs > fromMs && (ms === null || againMs < ms)) ms = againMs;
+              }
+              if (ms === null) continue;
+              // The run carries the instant it was chosen at, not the first
+              // pass, so formatting and the relative hint agree with `ms`.
+              at = new Date(ms);
             }
-            var ms = at.getTime();
-            if (ms <= fromMs) continue;
-            // A wall-clock minute repeated by a fall-back is listed once, but
-            // nothing here enforces that: new Date(y, mo, d, h, mi) resolves an
-            // ambiguous local time to its first instant, so the second pass is
-            // never constructed. Candidates are generated in ascending
-            // wall-clock order, and each one maps to a strictly later instant,
-            // so the list increases on its own. A guard against a non-increasing
-            // ms used to sit here; it never fired in any zone.
+            // Candidates are generated in ascending wall-clock order and each
+            // one resolves to a strictly later instant than the last, so the
+            // list increases on its own. A guard against a non-increasing ms
+            // used to sit here; it never fired in any zone.
             runs.push({ ms: ms, date: at, y: cy, mo: cm, d: cd, h: h, mi: m, dow: cw });
           }
         }
